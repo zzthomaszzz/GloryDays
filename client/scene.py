@@ -7,7 +7,7 @@ from client.net import NetworkClient
 from client.map_system import MapSystem
 from shared.constants import (
     CLIENT_INPUT_INTERVAL, BASE_VISION, TURRET_VISION,
-    SERVER_HOST, SERVER_PORT, SNAPSHOT_INTERVAL,
+    CLIENT_DEFAULT_HOST, SERVER_PORT, SNAPSHOT_INTERVAL,
     MAP_W, MAP_H,
     RUNE_X, RUNE_Y, RUNE_RADIUS, RUNE_CAPTURE_TIME,
 )
@@ -87,7 +87,7 @@ class SceneHeroSelect:
         self.next_scene   = self
         self.chosen_hero  = None
         self._hovered     = None
-        self._server_addr = f"{SERVER_HOST}:{SERVER_PORT}"
+        self._server_addr = f"{CLIENT_DEFAULT_HOST}:{SERVER_PORT}"
         self._addr_focused = False
         self._cursor_timer = 0.0
         self._cursor_vis   = True
@@ -260,16 +260,16 @@ class SceneConnecting:
         self.next_scene = self
         self._hero_name = hero_name
         self._font = pygame.font.SysFont("arial", 22)
-        raw = (server_addr or f"{SERVER_HOST}:{SERVER_PORT}").strip()
+        raw = (server_addr or f"{CLIENT_DEFAULT_HOST}:{SERVER_PORT}").strip()
         if ":" in raw:
             h, _, p = raw.rpartition(":")
             try:
-                self._host = h.strip() or SERVER_HOST
+                self._host = h.strip() or CLIENT_DEFAULT_HOST
                 self._port = int(p.strip())
             except ValueError:
-                self._host, self._port = SERVER_HOST, SERVER_PORT
+                self._host, self._port = CLIENT_DEFAULT_HOST, SERVER_PORT
         else:
-            self._host = raw or SERVER_HOST
+            self._host = raw or CLIENT_DEFAULT_HOST
             self._port = SERVER_PORT
         asyncio.create_task(self._connect())
 
