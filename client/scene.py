@@ -49,88 +49,126 @@ HERO_ASSET_MAP = {
 _HERO_CARDS = [
     {
         "name":  "Soldier",
-        "desc":  "Durable frontline fighter",
-        "stats": {"HP": 450, "Damage": 75, "Range": 200, "Speed": 125},
+        "desc":  "Ranged fighter with precision shots and turret support.",
+        "stats": {"HP": 420, "Damage": 75, "Range": 150, "Speed": 115, "Armor": 25},
+        "abilities": [
+            ("Q", "Snipe",        "Targeted long-range shot"),
+            ("E", "Place Turret", "Deploy an auto-attacking turret"),
+            ("R", "Dash",         "Dash in your movement direction"),
+        ],
     },
     {
         "name":  "Mage",
-        "desc":  "High ability power burst dealer",
-        "stats": {"HP": 400, "Damage": 30, "Range": 350, "Speed": 110},
+        "desc":  "Burst caster who excels at area control and healing.",
+        "stats": {"HP": 400, "Damage": 30, "Range": 120, "Speed": 110, "Armor": 15},
+        "abilities": [
+            ("Q", "Fireball",  "Launch a fireball that burns an area"),
+            ("E", "Mend",      "Channel to heal a target ally"),
+            ("R", "Teleport",  "Channel to teleport to a location"),
+        ],
     },
     {
         "name":  "Hunter",
-        "desc":  "Melee tank who charges and slows enemies",
-        "stats": {"HP": 700, "Damage": 80, "Range": 50, "Speed": 110},
+        "desc":  "Tanky melee brawler who charges and stuns enemies.",
+        "stats": {"HP": 530, "Damage": 80, "Range": 50, "Speed": 120, "Armor": 40},
+        "abilities": [
+            ("Q", "Charge",      "Dash to an enemy, stunning them"),
+            ("E", "Ground Slam", "AOE slam dealing 50 damage nearby"),
+            ("R", "Fortify",     "Gain damage reduction for 5 seconds"),
+        ],
     },
 ]
 
 
 def _hs_layout():
-    sw, sh = _SCREEN_W, _SCREEN_H
-    card_w = int(sw * 0.146)
-    card_h = int(sh * 0.407)
-    gap    = int(sw * 0.042)
+    sw, sh  = _SCREEN_W, _SCREEN_H
+    left_w  = sw * 2 // 3
+    right_w = sw - left_w
+
     n      = len(_HERO_CARDS)
-    total  = n * card_w + (n - 1) * gap
-    start_x = (sw - total) // 2
-    card_y  = int(sh * 0.148)
-    btn_w   = int(sw * 0.135)
-    btn_h   = int(sh * 0.056)
-    btn_x   = (sw - btn_w) // 2
-    btn_y   = int(sh * 0.62)
-    return card_w, card_h, gap, start_x, card_y, btn_w, btn_h, btn_x, btn_y
+    pad    = int(left_w * 0.06)
+    gap    = int(left_w * 0.025)
+    card_w = (left_w - 2 * pad - (n - 1) * gap) // n
+    card_h = int(sh * 0.52)
+    card_y = int(sh * 0.20)
+
+    right_cx = left_w + right_w // 2
+    btn_w    = int(right_w * 0.62)
+    btn_h    = int(sh * 0.056)
+    btn_x    = right_cx - btn_w // 2
+    btn_y    = int(sh * 0.88)
+
+    inp_w = int(left_w * 0.32)
+    inp_h = int(sh * 0.038)
+    inp_x = (left_w - inp_w) // 2
+    inp_y = card_y + card_h + int(sh * 0.04)
+
+    return {
+        "left_w": left_w, "right_w": right_w,
+        "n": n, "pad": pad, "gap": gap,
+        "card_w": card_w, "card_h": card_h, "card_y": card_y,
+        "btn_w": btn_w, "btn_h": btn_h, "btn_x": btn_x, "btn_y": btn_y,
+        "inp_w": inp_w, "inp_h": inp_h, "inp_x": inp_x, "inp_y": inp_y,
+    }
 
 
 #-------------------------------------------------------------------------------------------------------------------HeroSelect
 class SceneHeroSelect:
     def __init__(self):
-        self.next_scene   = self
-        self.chosen_hero  = None
-        self._hovered     = None
-        self._server_addr = f"{CLIENT_DEFAULT_HOST}:{SERVER_PORT}"
+        self.next_scene    = self
+        self.chosen_hero   = None
+        self._hovered      = None
+        self._server_addr  = f"{CLIENT_DEFAULT_HOST}:{SERVER_PORT}"
         self._addr_focused = False
         self._cursor_timer = 0.0
         self._cursor_vis   = True
 
-        # Native-res layout
-        cw, ch, gap, sx, cy, bw, bh, bx, by = _hs_layout()
+        lay = _hs_layout()
+        sw, sh   = _SCREEN_W, _SCREEN_H
+        left_w   = lay["left_w"]
+        cw, ch   = lay["card_w"], lay["card_h"]
+        pad, gap = lay["pad"], lay["gap"]
+        self._left_w = left_w
+
         self._card_rects_ui = [
-            pygame.Rect(sx + i * (cw + gap), cy, cw, ch)
+            pygame.Rect(pad + i * (cw + gap), lay["card_y"], cw, ch)
             for i in range(len(_HERO_CARDS))
         ]
-        self._btn_rect_ui = pygame.Rect(bx, by, bw, bh)
+        self._btn_rect_ui   = pygame.Rect(lay["btn_x"], lay["btn_y"], lay["btn_w"], lay["btn_h"])
+        self._input_rect_ui = pygame.Rect(lay["inp_x"], lay["inp_y"], lay["inp_w"], lay["inp_h"])
 
-        # Server address input — sits below the LOCK IN button
-        inp_w = int(_SCREEN_W * 0.22)
-        inp_h = int(_SCREEN_H * 0.042)
-        inp_x = (_SCREEN_W - inp_w) // 2
-        inp_y = by + bh + int(_SCREEN_H * 0.03)
-        self._input_rect_ui = pygame.Rect(inp_x, inp_y, inp_w, inp_h)
-
-        # Background at native res
         raw_bg = pygame.image.load(os.path.join(_ROOT, "asset", "lobby.png")).convert()
-        self._bg_ui = pygame.transform.smoothscale(raw_bg, (_SCREEN_W, _SCREEN_H))
-        self._overlay_ui = pygame.Surface((_SCREEN_W, _SCREEN_H), pygame.SRCALPHA)
-        self._overlay_ui.fill((0, 0, 0, 150))
+        self._bg_ui      = pygame.transform.smoothscale(raw_bg, (sw, sh))
+        self._overlay_ui = pygame.Surface((sw, sh), pygame.SRCALPHA)
+        self._overlay_ui.fill((0, 0, 0, 160))
 
-        # Portraits at native res (scaled to ~72% of card width, 60% of card height)
-        self._portraits_ui = {}
-        port_w = int(cw * 0.72)
-        port_h = int(ch * 0.52)
+        # Card portraits (big, fill most of card)
+        self._portraits_card   = {}
+        # Detail panel portraits (medium)
+        self._portraits_detail = {}
+        port_w  = int(cw * 0.78)
+        port_h  = int(ch * 0.62)
+        det_sz  = int(lay["right_w"] * 0.42)
         for card in _HERO_CARDS:
             path = HERO_ASSET_MAP.get(card["name"])
             if path and os.path.exists(path):
                 img = pygame.image.load(path).convert_alpha()
-                self._portraits_ui[card["name"]] = pygame.transform.smoothscale(img, (port_w, port_h))
+                self._portraits_card[card["name"]]   = pygame.transform.smoothscale(img, (port_w, port_h))
+                self._portraits_detail[card["name"]] = pygame.transform.smoothscale(img, (det_sz, det_sz))
 
-        # Native-res fonts
-        self._font_title = pygame.font.SysFont("arial", 54, bold=True)
-        self._font_hero  = pygame.font.SysFont("arial", 26, bold=True)
-        self._font_desc  = pygame.font.SysFont("arial", 16)
-        self._font_stat  = pygame.font.SysFont("arial", 18)
-        self._font_btn   = pygame.font.SysFont("arial", 30, bold=True)
-        self._font_hint  = pygame.font.SysFont("arial", 15)
-        self._font_addr  = pygame.font.SysFont("arial", 18)
+        self._font_title      = pygame.font.SysFont("arial", 44, bold=True)
+        self._font_card_name  = pygame.font.SysFont("arial", 20, bold=True)
+        self._font_det_name   = pygame.font.SysFont("arial", 32, bold=True)
+        self._font_det_desc   = pygame.font.SysFont("arial", 14)
+        self._font_stat_lbl   = pygame.font.SysFont("arial", 15)
+        self._font_stat_val   = pygame.font.SysFont("arial", 15, bold=True)
+        self._font_ab_key     = pygame.font.SysFont("arial", 13, bold=True)
+        self._font_ab_name    = pygame.font.SysFont("arial", 14, bold=True)
+        self._font_ab_desc    = pygame.font.SysFont("arial", 13)
+        self._font_ab_hdr     = pygame.font.SysFont("arial", 14, bold=True)
+        self._font_btn        = pygame.font.SysFont("arial", 28, bold=True)
+        self._font_hint       = pygame.font.SysFont("arial", 15)
+        self._font_addr       = pygame.font.SysFont("arial", 17)
 
     def process_input(self, events):
         mx, my = pygame.mouse.get_pos()   # raw screen coords → native-res rects
@@ -178,79 +216,147 @@ class SceneHeroSelect:
         screen.fill((0, 0, 0))
 
     def render_ui(self, ui_surf):
-        sw, sh = _SCREEN_W, _SCREEN_H
+        sw, sh   = _SCREEN_W, _SCREEN_H
+        left_w   = self._left_w
+        right_x  = left_w
+        right_w  = sw - right_x
+        right_cx = right_x + right_w // 2
+
         ui_surf.blit(self._bg_ui, (0, 0))
         ui_surf.blit(self._overlay_ui, (0, 0))
 
+        # Title — full width
         title = self._font_title.render("SELECT YOUR HERO", True, (220, 200, 100))
-        ui_surf.blit(title, title.get_rect(centerx=sw // 2, top=int(sh * 0.07)))
+        ui_surf.blit(title, title.get_rect(centerx=sw // 2, top=int(sh * 0.05)))
+
+        # Vertical divider
+        pygame.draw.line(ui_surf, (45, 55, 85), (left_w, int(sh * 0.13)), (left_w, int(sh * 0.96)), 1)
 
         mx, my = pygame.mouse.get_pos()
+
+        # ── Left 2/3: hero cards ─────────────────────────────────────────
         for i, (card, rect) in enumerate(zip(_HERO_CARDS, self._card_rects_ui)):
             is_selected = self.chosen_hero == card["name"]
             is_hovered  = self._hovered == i
 
-            card_surf = pygame.Surface((rect.w, rect.h), pygame.SRCALPHA)
+            surf = pygame.Surface((rect.w, rect.h), pygame.SRCALPHA)
             if is_selected:
-                card_surf.fill((40, 70, 130, 220))
+                surf.fill((40, 70, 130, 220))
             elif is_hovered:
-                card_surf.fill((50, 55, 80, 200))
+                surf.fill((50, 55, 80, 200))
             else:
-                card_surf.fill((22, 26, 44, 200))
-            ui_surf.blit(card_surf, rect.topleft)
+                surf.fill((22, 26, 44, 200))
+            ui_surf.blit(surf, rect.topleft)
 
-            border_col = (100, 160, 255) if is_selected else (80, 90, 120) if is_hovered else (45, 52, 80)
+            border_col = (100, 160, 255) if is_selected else (70, 82, 115) if is_hovered else (40, 48, 74)
             border_w   = 3 if is_selected else 1
             pygame.draw.rect(ui_surf, border_col, rect, border_w, border_radius=8)
 
-            portrait = self._portraits_ui.get(card["name"])
+            portrait = self._portraits_card.get(card["name"])
             if portrait:
                 px = rect.x + (rect.w - portrait.get_width()) // 2
-                ui_surf.blit(portrait, (px, rect.y + 18))
-                pb = rect.y + 18 + portrait.get_height()
+                ui_surf.blit(portrait, (px, rect.y + 10))
+                pb = rect.y + 10 + portrait.get_height()
             else:
-                pb = rect.y + int(rect.h * 0.55)
+                pb = rect.y + int(rect.h * 0.62)
 
-            name_surf = self._font_hero.render(card["name"].upper(), True, (255, 255, 255))
-            ui_surf.blit(name_surf, name_surf.get_rect(centerx=rect.centerx, top=pb + 12))
+            name_s = self._font_card_name.render(card["name"].upper(), True, (230, 230, 240))
+            ui_surf.blit(name_s, name_s.get_rect(centerx=rect.centerx, top=pb + 10))
 
-            desc_surf = self._font_desc.render(card["desc"], True, (170, 175, 200))
-            ui_surf.blit(desc_surf, desc_surf.get_rect(centerx=rect.centerx, top=pb + 46))
+        # ── Right 1/3: detail panel ──────────────────────────────────────
+        panel_pad = int(right_w * 0.05)
+        panel_x   = right_x + panel_pad
+        panel_w   = right_w - 2 * panel_pad
+        panel_y   = int(sh * 0.13)
+        panel_h   = int(sh * 0.72)
 
-            stat_y = pb + 72
-            for label, val in card["stats"].items():
-                lbl   = self._font_stat.render(f"{label}:", True, (140, 150, 175))
-                val_s = self._font_stat.render(str(val),    True, (225, 225, 225))
-                ui_surf.blit(lbl,   (rect.x + 18, stat_y))
-                ui_surf.blit(val_s, (rect.x + rect.w - val_s.get_width() - 18, stat_y))
-                stat_y += 28
+        panel_bg = pygame.Surface((panel_w, panel_h), pygame.SRCALPHA)
+        panel_bg.fill((12, 15, 26, 210))
+        ui_surf.blit(panel_bg, (panel_x, panel_y))
+        pygame.draw.rect(ui_surf, (45, 58, 90), (panel_x, panel_y, panel_w, panel_h), 1, border_radius=6)
 
+        if self.chosen_hero:
+            card    = next(c for c in _HERO_CARDS if c["name"] == self.chosen_hero)
+            y       = panel_y + 14
+
+            portrait = self._portraits_detail.get(self.chosen_hero)
+            if portrait:
+                px = panel_x + (panel_w - portrait.get_width()) // 2
+                ui_surf.blit(portrait, (px, y))
+                y += portrait.get_height() + 10
+
+            name_s = self._font_det_name.render(card["name"].upper(), True, (220, 200, 100))
+            ui_surf.blit(name_s, name_s.get_rect(centerx=panel_x + panel_w // 2, top=y))
+            y += name_s.get_height() + 5
+
+            desc_s = self._font_det_desc.render(card["desc"], True, (150, 158, 185))
+            ui_surf.blit(desc_s, desc_s.get_rect(centerx=panel_x + panel_w // 2, top=y))
+            y += desc_s.get_height() + 10
+
+            pygame.draw.line(ui_surf, (40, 52, 82), (panel_x + 10, y), (panel_x + panel_w - 10, y))
+            y += 10
+
+            # Stats (2-column grid)
+            stat_items = list(card["stats"].items())
+            col_w = panel_w // 2
+            for idx, (lbl, val) in enumerate(stat_items):
+                col = idx % 2
+                row = idx // 2
+                sx  = panel_x + col * col_w + 10
+                sy  = y + row * 22
+                l_s = self._font_stat_lbl.render(f"{lbl}:", True, (120, 130, 165))
+                v_s = self._font_stat_val.render(str(val), True, (210, 215, 230))
+                ui_surf.blit(l_s, (sx, sy))
+                ui_surf.blit(v_s, (sx + l_s.get_width() + 5, sy))
+            y += ((len(stat_items) + 1) // 2) * 22 + 10
+
+            pygame.draw.line(ui_surf, (40, 52, 82), (panel_x + 10, y), (panel_x + panel_w - 10, y))
+            y += 8
+
+            hdr = self._font_ab_hdr.render("ABILITIES", True, (150, 135, 70))
+            ui_surf.blit(hdr, hdr.get_rect(centerx=panel_x + panel_w // 2, top=y))
+            y += hdr.get_height() + 8
+
+            for key, name, desc in card["abilities"]:
+                key_r = pygame.Rect(panel_x + 8, y + 2, 22, 22)
+                pygame.draw.rect(ui_surf, (35, 46, 74), key_r, border_radius=4)
+                pygame.draw.rect(ui_surf, (65, 85, 125), key_r, 1, border_radius=4)
+                k_s = self._font_ab_key.render(key, True, (190, 205, 235))
+                ui_surf.blit(k_s, k_s.get_rect(center=key_r.center))
+
+                n_s = self._font_ab_name.render(name, True, (195, 180, 115))
+                ui_surf.blit(n_s, (panel_x + 36, y + 2))
+                d_s = self._font_ab_desc.render(desc, True, (120, 128, 155))
+                ui_surf.blit(d_s, (panel_x + 36, y + 18))
+                y += 40
+        else:
+            hint = self._font_hint.render("Select a hero to preview", True, (90, 96, 130))
+            ui_surf.blit(hint, hint.get_rect(centerx=panel_x + panel_w // 2, centery=panel_y + panel_h // 2))
+
+        # ── LOCK IN button ────────────────────────────────────────────────
         if self.chosen_hero:
             btn_col = (40, 165, 75) if self._btn_rect_ui.collidepoint(mx, my) else (28, 130, 55)
             pygame.draw.rect(ui_surf, btn_col, self._btn_rect_ui, border_radius=10)
             pygame.draw.rect(ui_surf, (60, 220, 100), self._btn_rect_ui, 2, border_radius=10)
             btn_text = self._font_btn.render("LOCK IN", True, (255, 255, 255))
             ui_surf.blit(btn_text, btn_text.get_rect(center=self._btn_rect_ui.center))
-        else:
-            hint = self._font_hint.render("Click a hero to select", True, (130, 135, 155))
-            ui_surf.blit(hint, hint.get_rect(centerx=sw // 2, centery=self._btn_rect_ui.centery))
 
-        # Server address input box
-        lbl = self._font_addr.render("Server:", True, (160, 165, 185))
-        lbl_rect = lbl.get_rect(right=self._input_rect_ui.left - 10, centery=self._input_rect_ui.centery)
+        # ── Server address input ──────────────────────────────────────────
+        lbl = self._font_addr.render("Server:", True, (140, 148, 175))
+        lbl_rect = lbl.get_rect(right=self._input_rect_ui.left - 8, centery=self._input_rect_ui.centery)
         ui_surf.blit(lbl, lbl_rect)
 
-        box_col  = (30, 35, 55) if not self._addr_focused else (20, 25, 50)
-        rim_col  = (100, 160, 255) if self._addr_focused else (60, 70, 100)
+        box_col = (25, 28, 46) if not self._addr_focused else (18, 22, 40)
+        rim_col = (100, 160, 255) if self._addr_focused else (52, 62, 92)
         pygame.draw.rect(ui_surf, box_col, self._input_rect_ui, border_radius=6)
         pygame.draw.rect(ui_surf, rim_col, self._input_rect_ui, 2, border_radius=6)
 
         display = self._server_addr
         if self._addr_focused and self._cursor_vis:
             display += "|"
-        addr_surf = self._font_addr.render(display, True, (220, 225, 240))
+        addr_surf = self._font_addr.render(display, True, (210, 218, 238))
         ui_surf.blit(addr_surf, addr_surf.get_rect(
-            midleft=(self._input_rect_ui.left + 10, self._input_rect_ui.centery)
+            midleft=(self._input_rect_ui.left + 8, self._input_rect_ui.centery)
         ))
 
 
@@ -1579,7 +1685,7 @@ class SceneTest(SceneBase):
     def _render_shop_panel(self, ui_surf, snap, my_data, hud):
         ITEM_ROW_H  = 46
         HEADER_H    = 28
-        PANEL_W     = 380
+        PANEL_W     = 560
         PANEL_H     = HEADER_H + len(ITEM_KEYS) * ITEM_ROW_H + 10
         panel_x     = _SCREEN_W // 2 - PANEL_W // 2
         panel_y     = hud["bars_bg"].top - PANEL_H - 6
@@ -1619,15 +1725,15 @@ class SceneTest(SceneBase):
 
             # Stats description
             desc_s = self._font_slot_sm.render(item["desc"], True, (120, 130, 150))
-            ui_surf.blit(desc_s, (panel_x + 120, row_y + ITEM_ROW_H // 2 - desc_s.get_height() // 2))
+            ui_surf.blit(desc_s, (panel_x + 148, row_y + ITEM_ROW_H // 2 - desc_s.get_height() // 2))
 
             # Cost
             cost_col = (200, 170, 50) if gold >= item["cost"] else (120, 80, 40)
             cost_s   = self._font_slot_sm.render(f"{item['cost']}g", True, cost_col)
-            ui_surf.blit(cost_s, (panel_x + PANEL_W - 72, row_y + ITEM_ROW_H // 2 - cost_s.get_height() // 2))
+            ui_surf.blit(cost_s, (panel_x + PANEL_W - 86, row_y + ITEM_ROW_H // 2 - cost_s.get_height() // 2))
 
             # BUY button
-            btn_rect = pygame.Rect(panel_x + PANEL_W - 52, row_y + 9, 46, 28)
+            btn_rect = pygame.Rect(panel_x + PANEL_W - 58, row_y + 8, 52, 30)
             self._shop_btn_rects.append(btn_rect)
             hovered  = btn_rect.collidepoint(mx_ui, my_ui)
             if can_buy:
