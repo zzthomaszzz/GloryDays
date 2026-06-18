@@ -9,11 +9,9 @@ from client.scene import SceneHeroSelect, VIEWPORT_W, VIEWPORT_H
 
 async def main():
     pygame.init()
-    info = pygame.display.Info()
-    sw = info.current_w if info.current_w > 0 else 1920
-    sh = info.current_h if info.current_h > 0 else 1080
-
-    screen = pygame.display.set_mode((sw, sh), pygame.FULLSCREEN)
+    screen = pygame.display.set_mode((0, 0), pygame.FULLSCREEN)
+    sw = screen.get_width()
+    sh = screen.get_height()
     pygame.display.set_caption("GloryDay")
     pygame.mouse.set_visible(True)
 
