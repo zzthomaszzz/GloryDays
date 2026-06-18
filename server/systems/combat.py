@@ -2,7 +2,7 @@ from shared.constants import ATTACK_WINDUP
 from server.projectiles import Projectile, apply_damage
 
 
-def resolve_combat(players, buildings, dt, projectiles, proj_counter):
+def resolve_combat(players, buildings, player_turrets, dt, projectiles, proj_counter):
     for player in players.values():
         if player.is_dead:
             continue
@@ -16,7 +16,7 @@ def resolve_combat(players, buildings, dt, projectiles, proj_counter):
             continue
 
         target_type, target_id = player.attack_target
-        target = _get_target(target_type, target_id, players, buildings)
+        target = _get_target(target_type, target_id, players, buildings, player_turrets)
 
         if not target or _is_gone(target):
             player.attack_target = None
@@ -95,10 +95,11 @@ def _find_turret_target(turret, players):
     return best
 
 
-def _get_target(target_type, target_id, players, buildings):
+def _get_target(target_type, target_id, players, buildings, player_turrets):
     match target_type:
         case "player":   return players.get(int(target_id))
         case "building": return buildings.get(int(target_id))
+        case "turret":   return player_turrets.get(int(target_id))
     return None
 
 

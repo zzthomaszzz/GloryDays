@@ -196,7 +196,7 @@ class GameState:
                     player.slow_factor = 1.0
         apply_movement(self.players, dt)
         update_abilities(self.players, dt, game_state=self)
-        resolve_combat(self.players, self.buildings, dt, self.projectiles, self._proj_counter)
+        resolve_combat(self.players, self.buildings, self.player_turrets, dt, self.projectiles, self._proj_counter)
         resolve_turret_combat(self.player_turrets, self.players, dt, self.projectiles, self._proj_counter)
         update_projectiles(self.projectiles, self.players, self.buildings, self.player_turrets, dt)
         for fp in list(self.fireball_projectiles.values()):

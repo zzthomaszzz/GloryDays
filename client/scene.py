@@ -766,6 +766,17 @@ class SceneTest(SceneBase):
                     self._pending_attack = ("player", pid)
                     return
 
+        for tid, t in snap.get("turrets", {}).items():
+            if t.get("is_destroyed") or t.get("team") == self.client.my_team:
+                continue
+            if not self._is_visible(t["x"], t["y"]):
+                continue
+            half = t.get("size", 20) / 2
+            dx, dy = wx - t["x"], wy - t["y"]
+            if abs(dx) <= half and abs(dy) <= half:
+                self._pending_attack = ("turret", tid)
+                return
+
     def update(self, dt):
         super().update(dt)
         self.input_send_timer += dt
