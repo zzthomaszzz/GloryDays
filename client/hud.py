@@ -1,8 +1,11 @@
+# HudRenderer: all in-game UI — health bars, minimap, shop panel, lobby overlay, victory screen
 import math
 import pygame
 
 from shared.constants import MAP_W, MAP_H, RUNE_X, RUNE_Y
 from shared.items import ITEMS, ITEM_KEYS
+
+_INV_SLOT_SIZE = 32   # inventory slot pixel size
 
 #Minimap dimensions (native UI pixels)
 MINI_W = 240
@@ -20,25 +23,31 @@ _ABILITY_KEYS = ["Q", "E", "R"]
 
 #---------------------------------------------------------------------------------------------------
 def build_hud_geometry(sw, sh):
-    A    = 72    # ability slot size
-    I    = 58    # inventory slot size
-    GA   = 6     # gap between ability slots
-    GI   = 6     # gap between inventory slots
-    SEP  = 14    # gap between ability and inventory sections
-    GW   = 76    # gold section width
-    GGAP = 12    # gap between gold section and ability slots
-    PX   = 14    # outer horizontal padding
-    PT   = 10    # top padding
-    KB   = 18    # bottom key-label row height
+    A      = 72              # ability slot size
+    I      = _INV_SLOT_SIZE  # inventory slot size
+    GA     = 6               # gap between ability slots
+    GI     = 4               # gap between inventory slots (h and v)
+    SEP    = 14              # gap between ability and inventory sections
+    GW     = 76              # gold section width
+    GGAP   = 12              # gap between gold section and ability slots
+    PX     = 14              # outer horizontal padding
+    PT     = 10              # top padding
+    KB     = 18              # bottom key-label row height
+    SHOP_W = 42              # shop button width
+    SHOP_G = 6               # gap from inventory grid to shop button
 
     HP_H    = 12
     MP_H    = 7
     BAR_GAP = 3
     BAR_BOT = 5
 
-    RA  = A // 4      # recall mini-slot size
-    RAG = 8           # gap between inventory and recall slot
-    panel_w = PX + GW + GGAP + 3*A + 2*GA + SEP + 3*I + 2*GI + RAG + RA + PX
+    RA  = A // 4   # recall mini-slot size
+    RAG = 8        # gap between shop button and recall slot
+
+    inv_grid_w = 3 * I + 2 * GI   # 3 columns
+    inv_grid_h = 2 * I + GI       # 2 rows
+
+    panel_w = PX + GW + GGAP + 3*A + 2*GA + SEP + inv_grid_w + SHOP_G + SHOP_W + RAG + RA + PX
     bars_h  = HP_H + BAR_GAP + MP_H + BAR_BOT
     panel_h = PT + A + KB
     panel_x = sw // 2 - panel_w // 2
@@ -47,13 +56,19 @@ def build_hud_geometry(sw, sh):
     slot_y = panel_y + PT
     key_y  = slot_y + A + 4
 
-    gold_x = panel_x + PX
+    gold_x  = panel_x + PX
     a_start = gold_x + GW + GGAP
     ability_rects = [pygame.Rect(a_start + i*(A+GA), slot_y, A, A) for i in range(3)]
 
     i_start = a_start + 3*A + 2*GA + SEP
-    inv_y   = slot_y + (A - I) // 2
-    inventory_rects = [pygame.Rect(i_start + i*(I+GI), inv_y, I, I) for i in range(3)]
+    inv_y   = slot_y + (A - inv_grid_h) // 2
+
+    # slots 0-2 = top row, slots 3-5 = bottom row
+    inventory_rects = [
+        pygame.Rect(i_start + col * (I + GI), inv_y + row * (I + GI), I, I)
+        for row in range(2)
+        for col in range(3)
+    ]
 
     div_gold = gold_x + GW + GGAP // 2
     div_inv  = i_start - SEP // 2
@@ -64,10 +79,11 @@ def build_hud_geometry(sw, sh):
     mp_bar  = pygame.Rect(bar_x, panel_y - bars_h + HP_H + BAR_GAP, bar_w, MP_H)
     bars_bg = pygame.Rect(bar_x, panel_y - bars_h, bar_w, bars_h)
 
-    inv_bottom  = inv_y + I
-    shop_rect   = pygame.Rect(i_start, inv_bottom + 4, 3*I + 2*GI, 14)
+    shop_x    = i_start + inv_grid_w + SHOP_G
+    shop_y    = inv_y + I + GI          # aligned with bottom row
+    shop_rect = pygame.Rect(shop_x, shop_y, SHOP_W, I)
 
-    recall_x    = i_start + 3*I + 2*GI + RAG
+    recall_x    = shop_x + SHOP_W + RAG
     recall_y    = slot_y + (A - RA) // 2
     recall_rect = pygame.Rect(recall_x, recall_y, RA, RA)
 
@@ -90,6 +106,86 @@ def build_hud_geometry(sw, sh):
         "shop_rect":       shop_rect,
         "recall_rect":     recall_rect,
     }
+
+
+def _build_item_icons(size):
+    s = size
+    h = s // 2
+    icons = {}
+
+    def _surf(bg):
+        surf = pygame.Surface((s, s))
+        surf.fill(bg)
+        return surf
+
+    # Scythe — orange, diagonal slash
+    surf = _surf((100, 30, 5))
+    pygame.draw.line(surf, (255, 140, 40), (3, s - 3), (s - 3, 3), 3)
+    pygame.draw.line(surf, (255, 210, 110), (s - 7, 3), (s - 3, 7), 2)
+    icons["Scythe"] = surf
+
+    # Chain Vest — steel blue, shield outline
+    surf = _surf((12, 32, 75))
+    pts = [(h, 3), (s - 4, s // 3), (s - 4, h + 3), (h, s - 3), (4, h + 3), (4, s // 3)]
+    pygame.draw.polygon(surf, (70, 130, 210), pts, 2)
+    icons["Chain Vest"] = surf
+
+    # Staff — purple, orb on wand
+    surf = _surf((42, 10, 78))
+    pygame.draw.circle(surf, (180, 90, 255), (h, h - 4), 7, 2)
+    pygame.draw.line(surf, (150, 65, 210), (h, h + 3), (h, s - 3), 2)
+    icons["Staff"] = surf
+
+    # Ancient Rune — green, cross
+    surf = _surf((8, 45, 14))
+    pygame.draw.line(surf, (55, 195, 75), (h, 3), (h, s - 3), 2)
+    pygame.draw.line(surf, (55, 195, 75), (3, h), (s - 3, h), 2)
+    icons["Ancient Rune"] = surf
+
+    # Boots — brown, diamond chevron
+    surf = _surf((48, 28, 6))
+    pygame.draw.polygon(surf, (170, 115, 50), [(h, 3), (s - 3, h), (h, s - 3), (3, h)], 2)
+    icons["Boots"] = surf
+
+    # Fang — crimson, two fangs
+    surf = _surf((68, 6, 14))
+    q = s // 4
+    pygame.draw.polygon(surf, (210, 50, 50), [(q, 3), (q + q // 2, s - 4), (q * 2 - 1, 3)])
+    pygame.draw.polygon(surf, (210, 50, 50), [(q * 2 + 1, 3), (q * 2 + q // 2, s - 4), (q * 3, 3)])
+    icons["Fang"] = surf
+
+    # Iron Heart — dark red, heart shape
+    surf = _surf((55, 8, 8))
+    pygame.draw.circle(surf, (210, 40, 40), (h - 3, h - 2), s // 5)
+    pygame.draw.circle(surf, (210, 40, 40), (h + 3, h - 2), s // 5)
+    pygame.draw.polygon(surf, (210, 40, 40), [(4, h - 1), (h, s - 3), (s - 4, h - 1)])
+    icons["Iron Heart"] = surf
+
+    # Grimoire — deep purple, open book with stars
+    surf = _surf((30, 8, 60))
+    pygame.draw.rect(surf, (150, 80, 230), (3, h - 4, h - 2, s - h - 1), 1)
+    pygame.draw.rect(surf, (150, 80, 230), (h + 1, h - 4, h - 2, s - h - 1), 1)
+    pygame.draw.line(surf, (150, 80, 230), (h, h - 4), (h, s - 3), 1)
+    pygame.draw.circle(surf, (220, 180, 255), (h - 4, h - 8), 2)
+    pygame.draw.circle(surf, (220, 180, 255), (h + 4, h - 7), 2)
+    icons["Grimoire"] = surf
+
+    # Null Stone — slate grey, hollow diamond
+    surf = _surf((22, 24, 30))
+    pts = [(h, 3), (s - 4, h), (h, s - 3), (4, h)]
+    pygame.draw.polygon(surf, (140, 150, 170), pts, 2)
+    pygame.draw.polygon(surf, (80, 90, 105), pts)
+    pygame.draw.polygon(surf, (140, 150, 170), pts, 2)
+    icons["Null Stone"] = surf
+
+    # Swiftblade — teal, two angled speed-lines + blade
+    surf = _surf((6, 45, 55))
+    pygame.draw.line(surf, (60, 200, 220), (3, h + 4),  (s - 3, h - 6), 3)
+    pygame.draw.line(surf, (120, 230, 240), (3, h + 9), (s - 8, h),     2)
+    pygame.draw.polygon(surf, (200, 240, 255), [(s - 5, h - 8), (s - 2, h - 2), (s - 10, h - 4)])
+    icons["Swiftblade"] = surf
+
+    return icons
 
 
 #---------------------------------------------------------------------------------------------------
@@ -125,7 +221,9 @@ class HudRenderer:
         self._font_dead_sub    = pygame.font.SysFont("consolas", 20)
 
         #Assets
-        self._icon_gold = load_asset_fn("icon_gold.png", (14, 14))
+        self._icon_gold      = load_asset_fn("icon_gold.png", (14, 14))
+        self._item_icons     = _build_item_icons(_INV_SLOT_SIZE)
+        self._shop_item_icons = _build_item_icons(52)
 
         _icon_map = {
             "Snipe":       "icon_snipe.png",
@@ -139,6 +237,8 @@ class HudRenderer:
 
         #Mutable output — read by scene for click handling
         self.shop_btn_rects   = []
+        self.shop_icon_rects  = []   # list of (item_key, rect)
+        self.shop_buy_rect    = None
         self.ready_btn_rect   = None
         self.force_start_rect = None
 
@@ -168,7 +268,8 @@ class HudRenderer:
     # ── Main render entry ────────────────────────────────────────────────────
 
     def render(self, ui_surf, snap, client, my_data,
-               shop_open, my_ready, cam_x, cam_y, cam_locked, placement_mode, is_visible_fn):
+               shop_open, my_ready, cam_x, cam_y, cam_locked, placement_mode, is_visible_fn,
+               shop_sel=None, end_countdown=None, quit_confirm=False):
         mx_ui, my_ui = pygame.mouse.get_pos()
         hud          = self.geometry
         my_pos       = client.get_interpolated_pos("players", client.my_player_id)
@@ -182,9 +283,11 @@ class HudRenderer:
         self._render_recall_slot(ui_surf, my_data.get("abilities", []), hud)
         self._render_shop_button(ui_surf, hud, shop_open, mx_ui, my_ui)
 
-        self.shop_btn_rects = []
+        self.shop_btn_rects  = []
+        self.shop_icon_rects = []
+        self.shop_buy_rect   = None
         if shop_open:
-            self._render_shop_panel(ui_surf, snap, my_data, hud, my_pos)
+            self._render_shop_panel(ui_surf, snap, my_data, hud, my_pos, shop_sel)
 
         self._render_minimap(ui_surf, snap, client, cam_x, cam_y, cam_locked, is_visible_fn)
 
@@ -197,7 +300,10 @@ class HudRenderer:
 
         winner = snap.get("winner")
         if winner is not None:
-            self._render_victory_overlay(ui_surf, winner, client.my_team)
+            self._render_victory_overlay(ui_surf, winner, client.my_team, countdown=end_countdown)
+
+        if quit_confirm:
+            self._render_quit_confirm(ui_surf)
 
     # ── Vitals (HP / mana bars) ──────────────────────────────────────────────
 
@@ -303,8 +409,17 @@ class HudRenderer:
                 pygame.draw.rect(ui_surf, (85, 70, 35), rect, 1)
                 ns = self._font_slot_sm.render("PASSIVE", True, (160, 140, 80))
                 ui_surf.blit(ns, ns.get_rect(centerx=rect.centerx, centery=rect.centery - 6))
-                crit_s = self._font_slot_sm.render("25% CRIT", True, (220, 185, 60))
-                ui_surf.blit(crit_s, crit_s.get_rect(centerx=rect.centerx, centery=rect.centery + 7))
+                if ability.get("crit_chance") is not None:
+                    crit_pct = int(ability["crit_chance"] * 100)
+                    sub_s = self._font_slot_sm.render(f"{crit_pct}% CRIT", True, (220, 185, 60))
+                elif ability.get("max_stacks") is not None:
+                    stacks  = ability.get("stacks", 0)
+                    mx      = ability["max_stacks"]
+                    sub_s = self._font_slot_sm.render(f"{stacks}/{mx} ARMOR", True, (100, 200, 255))
+                else:
+                    sub_s = None
+                if sub_s:
+                    ui_surf.blit(sub_s, sub_s.get_rect(centerx=rect.centerx, centery=rect.centery + 7))
 
             elif ab_spinning:
                 pygame.draw.rect(ui_surf, (200, 160, 30), rect, 2)
@@ -409,23 +524,23 @@ class HudRenderer:
     # ── Inventory ────────────────────────────────────────────────────────────
 
     def _render_inventory(self, ui_surf, my_data, hud, mx_ui, my_ui):
-        inventory = my_data.get("inventory", [])[:3]
+        inventory = my_data.get("inventory", [])[:6]
         for i, rect in enumerate(hud["inventory_rects"]):
             pygame.draw.rect(ui_surf, (12, 13, 22), rect)
             item = inventory[i] if i < len(inventory) else None
             if item:
-                pygame.draw.rect(ui_surf, (98, 78, 30), rect.inflate(-6, -6))
+                icon = self._item_icons.get(item)
+                if icon:
+                    ui_surf.blit(icon, rect.topleft)
+                else:
+                    pygame.draw.rect(ui_surf, (98, 78, 30), rect.inflate(-4, -4))
                 if rect.collidepoint(mx_ui, my_ui):
                     hover_ov = pygame.Surface((rect.w, rect.h), pygame.SRCALPHA)
-                    hover_ov.fill((0, 0, 0, 110))
+                    hover_ov.fill((0, 0, 0, 150))
                     ui_surf.blit(hover_ov, rect.topleft)
                     refund = ITEMS.get(item, {}).get("cost", 0) // 2
                     sell_s = self._font_slot_sm.render(f"SELL {refund}g", True, (210, 130, 50))
                     ui_surf.blit(sell_s, sell_s.get_rect(center=rect.center))
-                else:
-                    lbl   = ITEMS.get(item, {}).get("label", item[:3])
-                    lbl_s = self._font_slot_sm.render(lbl, True, (230, 205, 120))
-                    ui_surf.blit(lbl_s, lbl_s.get_rect(center=rect.center))
             pygame.draw.rect(ui_surf, (22, 24, 40), rect, 1)
 
     # ── Shop button ──────────────────────────────────────────────────────────
@@ -439,71 +554,151 @@ class HudRenderer:
             bg, brd, tc = (18, 20, 34), (40, 46, 70), (100, 110, 150)
         else:
             bg, brd, tc = (12, 13, 24), (28, 32, 50), (65, 72, 100)
-        pygame.draw.rect(ui_surf, bg,  sr)
-        pygame.draw.rect(ui_surf, brd, sr, 1)
+        pygame.draw.rect(ui_surf, bg,  sr, border_radius=4)
+        pygame.draw.rect(ui_surf, brd, sr, 1, border_radius=4)
         st = self._font_shop.render("SHOP", True, tc)
         ui_surf.blit(st, st.get_rect(center=sr.center))
 
     # ── Shop panel ───────────────────────────────────────────────────────────
 
-    def _render_shop_panel(self, ui_surf, snap, my_data, hud, my_pos):
-        ITEM_ROW_H = 46
-        HEADER_H   = 28
-        PANEL_W    = 560
-        PANEL_H    = HEADER_H + len(ITEM_KEYS) * ITEM_ROW_H + 10
+    def _render_shop_panel(self, ui_surf, snap, my_data, hud, my_pos, shop_sel=None):
+        ICON_SZ    = 52
+        ICON_GAP   = 8
+        COLS       = 5
+        HEADER_H   = 36
+        PAD        = 14
+        LEFT_W     = PAD + COLS * ICON_SZ + (COLS - 1) * ICON_GAP + PAD
+        RIGHT_W    = 260
+        PANEL_W    = LEFT_W + RIGHT_W
+        rows       = max(1, -(-len(ITEM_KEYS) // COLS))   # ceil division
+        GRID_H     = rows * ICON_SZ + (rows - 1) * ICON_GAP
+        PANEL_H    = HEADER_H + PAD + GRID_H + PAD + 16   # +16 for hint text
         panel_x    = self._sw // 2 - PANEL_W // 2
-        panel_y    = hud["bars_bg"].top - PANEL_H - 6
+        panel_y    = self._sh // 2 - PANEL_H // 2
 
-        pygame.draw.rect(ui_surf, (10, 11, 20), (panel_x, panel_y, PANEL_W, PANEL_H))
-        pygame.draw.rect(ui_surf, (50, 60, 90), (panel_x, panel_y, PANEL_W, PANEL_H), 1)
-        title = self._font_slot_sm.render("SHOP", True, (180, 160, 60))
-        ui_surf.blit(title, title.get_rect(centerx=panel_x + PANEL_W // 2, top=panel_y + 6))
-
-        if not _check_near_shop(snap, my_pos):
-            msg = self._font_slot_sm.render("Move closer to a shop ($) to buy", True, (160, 120, 60))
-            ui_surf.blit(msg, msg.get_rect(centerx=panel_x + PANEL_W // 2,
-                                           centery=panel_y + HEADER_H + PANEL_H // 2))
-            return
-
-        gold      = my_data.get("gold", 0)
-        inventory = my_data.get("inventory", [None] * 3)
-        inv_full  = all(s is not None for s in inventory[:3])
         mx_ui, my_ui = pygame.mouse.get_pos()
 
-        for idx, key in enumerate(ITEM_KEYS):
-            item    = ITEMS[key]
-            row_y   = panel_y + HEADER_H + idx * ITEM_ROW_H
-            can_buy = gold >= item["cost"] and not inv_full
+        # Panel background
+        panel_surf = pygame.Surface((PANEL_W, PANEL_H), pygame.SRCALPHA)
+        panel_surf.fill((10, 11, 20, 230))
+        ui_surf.blit(panel_surf, (panel_x, panel_y))
+        pygame.draw.rect(ui_surf, (55, 65, 95), (panel_x, panel_y, PANEL_W, PANEL_H), 1)
 
-            row_col = (16, 17, 28) if idx % 2 == 0 else (13, 14, 24)
-            pygame.draw.rect(ui_surf, row_col, (panel_x, row_y, PANEL_W, ITEM_ROW_H))
+        # Divider between left/right panes
+        div_x = panel_x + LEFT_W
+        pygame.draw.line(ui_surf, (40, 50, 75), (div_x, panel_y + HEADER_H), (div_x, panel_y + PANEL_H - 1))
 
-            name_col = (215, 195, 120) if can_buy else (100, 90, 60)
-            name_s   = self._font_slot_sm.render(key, True, name_col)
-            ui_surf.blit(name_s, (panel_x + 8, row_y + ITEM_ROW_H // 2 - name_s.get_height() // 2))
+        # Header
+        title_s = self._font_slot_sm.render("SHOP", True, (200, 175, 70))
+        ui_surf.blit(title_s, title_s.get_rect(centerx=panel_x + PANEL_W // 2, top=panel_y + 10))
+        pygame.draw.line(ui_surf, (40, 50, 75), (panel_x, panel_y + HEADER_H), (panel_x + PANEL_W, panel_y + HEADER_H))
 
-            desc_s = self._font_slot_sm.render(item["desc"], True, (120, 130, 150))
-            ui_surf.blit(desc_s, (panel_x + 148, row_y + ITEM_ROW_H // 2 - desc_s.get_height() // 2))
+        gold      = my_data.get("gold", 0)
+        inventory = my_data.get("inventory", [None] * 6)
+        inv_full  = all(s is not None for s in inventory[:6])
+        near      = _check_near_shop(snap, my_pos)
 
-            cost_col = (200, 170, 50) if gold >= item["cost"] else (120, 80, 40)
-            cost_s   = self._font_slot_sm.render(f"{item['cost']}g", True, cost_col)
-            ui_surf.blit(cost_s, (panel_x + PANEL_W - 86, row_y + ITEM_ROW_H // 2 - cost_s.get_height() // 2))
+        # Gold display in header
+        gold_s = self._font_slot_sm.render(f"{gold}g", True, (220, 185, 60))
+        ui_surf.blit(gold_s, gold_s.get_rect(right=panel_x + PANEL_W - PAD, centery=panel_y + HEADER_H // 2))
 
-            btn_rect = pygame.Rect(panel_x + PANEL_W - 58, row_y + 8, 52, 30)
-            self.shop_btn_rects.append(btn_rect)
-            hovered  = btn_rect.collidepoint(mx_ui, my_ui)
+        # ── Left pane: icon grid ─────────────────────────────────────────────
+        grid_y = panel_y + HEADER_H + PAD
+        grid_x = panel_x + PAD
+        for i, key in enumerate(ITEM_KEYS):
+            col = i % COLS
+            row = i // COLS
+            ix  = grid_x + col * (ICON_SZ + ICON_GAP)
+            iy  = grid_y + row * (ICON_SZ + ICON_GAP)
+            r   = pygame.Rect(ix, iy, ICON_SZ, ICON_SZ)
+            self.shop_icon_rects.append((key, r))
+
+            selected = (key == shop_sel)
+            hovered  = r.collidepoint(mx_ui, my_ui)
+
+            border_col = (220, 185, 60) if selected else ((90, 110, 160) if hovered else (35, 40, 60))
+            pygame.draw.rect(ui_surf, (20, 22, 36), r)
+            icon = self._shop_item_icons.get(key)
+            if icon:
+                ui_surf.blit(icon, r.topleft)
+            pygame.draw.rect(ui_surf, border_col, r, 2 if selected else 1)
+
+            # item name label below icon
+            lbl = self._font_slot_sm.render(key, True, (180, 165, 120) if selected else (100, 110, 130))
+            # truncate if too wide
+            while lbl.get_width() > ICON_SZ + 4 and len(key) > 3:
+                key = key[:-1]
+                lbl = self._font_slot_sm.render(key + "..", True, (180, 165, 120) if selected else (100, 110, 130))
+
+        # Hint text
+        hint_s = self._font_slot_sm.render("Left-click: select   Right-click: buy instantly", True, (60, 70, 90))
+        ui_surf.blit(hint_s, hint_s.get_rect(centerx=panel_x + LEFT_W // 2,
+                                              top=grid_y + GRID_H + 6))
+
+        # ── Right pane: item detail ──────────────────────────────────────────
+        rx = div_x + PAD
+        ry = panel_y + HEADER_H + PAD
+
+        if not near:
+            warn_s = self._font_slot_sm.render("Go near a  $  shop to buy", True, (170, 120, 50))
+            ui_surf.blit(warn_s, warn_s.get_rect(centerx=div_x + RIGHT_W // 2, top=ry))
+            if shop_sel:
+                # still show item info even if far from shop
+                item = ITEMS.get(shop_sel)
+                if item:
+                    nm_s = self._font_key_lbl.render(shop_sel, True, (200, 185, 130))
+                    ui_surf.blit(nm_s, (rx, ry + 20))
+                    dc_s = self._font_slot_sm.render(item["desc"], True, (130, 140, 160))
+                    ui_surf.blit(dc_s, (rx, ry + 38))
+            return
+
+        if shop_sel and shop_sel in ITEMS:
+            item     = ITEMS[shop_sel]
+            can_buy  = gold >= item["cost"] and not inv_full
+
+            nm_s = self._font_key_lbl.render(shop_sel, True, (220, 200, 140))
+            ui_surf.blit(nm_s, (rx, ry))
+
+            pygame.draw.line(ui_surf, (40, 50, 75), (rx, ry + nm_s.get_height() + 4),
+                             (panel_x + PANEL_W - PAD, ry + nm_s.get_height() + 4))
+
+            desc_y = ry + nm_s.get_height() + 10
+            dc_s   = self._font_slot_sm.render(item["desc"], True, (140, 155, 175))
+            ui_surf.blit(dc_s, dc_s.get_rect(x=rx, y=desc_y))
+
+            cost_y    = desc_y + dc_s.get_height() + 12
+            cost_col  = (220, 185, 60) if gold >= item["cost"] else (150, 80, 50)
+            cost_lbl  = self._font_slot_sm.render("Cost:", True, (100, 110, 130))
+            cost_val  = self._font_key_lbl.render(f"{item['cost']}g", True, cost_col)
+            ui_surf.blit(cost_lbl, (rx, cost_y))
+            ui_surf.blit(cost_val, (rx + cost_lbl.get_width() + 6, cost_y))
+
+            btn_w   = RIGHT_W - PAD * 2
+            btn_h   = 30
+            btn_x   = rx
+            btn_y   = panel_y + PANEL_H - PAD - btn_h
+            btn_r   = pygame.Rect(btn_x, btn_y, btn_w, btn_h)
+            self.shop_buy_rect = btn_r if can_buy else None
+
+            hov = btn_r.collidepoint(mx_ui, my_ui)
             if can_buy:
-                btn_bg, btn_brd, btn_tc = (40, 120, 50) if hovered else (25, 80, 35), (70, 180, 80), (220, 255, 220)
+                bg  = (50, 130, 60) if hov else (30, 90, 40)
+                brd = (80, 200, 95)
+                tc  = (225, 255, 225)
             else:
-                btn_bg, btn_brd, btn_tc = (30, 30, 40), (45, 45, 60), (70, 70, 90)
-            pygame.draw.rect(ui_surf, btn_bg,  btn_rect, border_radius=4)
-            pygame.draw.rect(ui_surf, btn_brd, btn_rect, 1, border_radius=4)
-            buy_s = self._font_slot_sm.render("BUY", True, btn_tc)
-            ui_surf.blit(buy_s, buy_s.get_rect(center=btn_rect.center))
+                bg, brd, tc = (28, 28, 40), (45, 45, 65), (65, 65, 85)
+            pygame.draw.rect(ui_surf, bg,  btn_r, border_radius=5)
+            pygame.draw.rect(ui_surf, brd, btn_r, 1, border_radius=5)
+            buy_lbl = self._font_key_lbl.render("BUY", True, tc)
+            ui_surf.blit(buy_lbl, buy_lbl.get_rect(center=btn_r.center))
 
-        if inv_full:
-            msg = self._font_slot_sm.render("Inventory full", True, (180, 80, 60))
-            ui_surf.blit(msg, msg.get_rect(right=panel_x + PANEL_W - 8, top=panel_y + 4))
+            if inv_full:
+                full_s = self._font_slot_sm.render("Inventory full", True, (180, 70, 50))
+                ui_surf.blit(full_s, full_s.get_rect(centerx=btn_r.centerx, bottom=btn_y - 4))
+        else:
+            hint2 = self._font_slot_sm.render("Select an item", True, (60, 70, 90))
+            ui_surf.blit(hint2, hint2.get_rect(centerx=div_x + RIGHT_W // 2,
+                                               centery=panel_y + PANEL_H // 2))
 
     # ── Minimap ──────────────────────────────────────────────────────────────
 
@@ -611,7 +806,7 @@ class HudRenderer:
         pw = int(sw * 0.30)
         ph = int(sh * 0.38)
         px = (sw - pw) // 2
-        py = int(sh * 0.18)
+        py = 10
 
         panel = pygame.Surface((pw, ph), pygame.SRCALPHA)
         panel.fill((8, 10, 22, 220))
@@ -687,7 +882,7 @@ class HudRenderer:
 
     # ── Victory / defeat overlay ─────────────────────────────────────────────
 
-    def _render_victory_overlay(self, ui_surf, winner, my_team):
+    def _render_victory_overlay(self, ui_surf, winner, my_team, countdown=None):
         sw, sh = self._sw, self._sh
         ov     = pygame.Surface((sw, sh), pygame.SRCALPHA)
         ov.fill((0, 0, 0, 160))
@@ -698,8 +893,30 @@ class HudRenderer:
         main_s   = big_font.render("VICTORY" if my_win else "DEFEAT",
                                    True, (230, 195, 50) if my_win else (170, 50, 50))
         ui_surf.blit(main_s, main_s.get_rect(centerx=sw // 2, centery=sh // 2 - 50))
-        hint_s = sub_font.render("Press ESC to exit", True, (160, 160, 180))
-        ui_surf.blit(hint_s, hint_s.get_rect(centerx=sw // 2, centery=sh // 2 + 40))
+        if countdown is not None:
+            secs   = max(1, int(countdown) + 1)
+            lines  = [f"Returning to menu in {secs}s...", "[M] Return now   [ESC] Quit"]
+        else:
+            lines  = ["[M] Return to menu", "[ESC] Quit"]
+        for i, txt in enumerate(lines):
+            s = sub_font.render(txt, True, (160, 160, 180))
+            ui_surf.blit(s, s.get_rect(centerx=sw // 2, centery=sh // 2 + 35 + i * 28))
+
+    def _render_quit_confirm(self, ui_surf):
+        sw, sh   = self._sw, self._sh
+        pw, ph   = 340, 130
+        px       = (sw - pw) // 2
+        py       = (sh - ph) // 2
+        panel    = pygame.Surface((pw, ph), pygame.SRCALPHA)
+        panel.fill((10, 12, 26, 230))
+        ui_surf.blit(panel, (px, py))
+        pygame.draw.rect(ui_surf, (180, 60, 60), (px, py, pw, ph), 2, border_radius=10)
+        big  = pygame.font.SysFont("arial", 30, bold=True)
+        small = pygame.font.SysFont("arial", 20)
+        title = big.render("Quit Game?", True, (230, 230, 230))
+        ui_surf.blit(title, title.get_rect(centerx=px + pw // 2, top=py + 18))
+        hint  = small.render("[Y] Yes — quit       [N] / [ESC] No — stay", True, (160, 160, 180))
+        ui_surf.blit(hint, hint.get_rect(centerx=px + pw // 2, top=py + 68))
 
     # ── Static helpers ───────────────────────────────────────────────────────
 

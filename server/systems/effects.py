@@ -1,3 +1,4 @@
+# System: advances projectiles, fireballs, burning areas, and banners each frame
 def update_effects(projectiles, fireball_projectiles, burning_areas, banners,
                    players, buildings, player_turrets, ba_counter, dt):
     _tick_projectiles(projectiles, players, buildings, player_turrets, banners, dt)

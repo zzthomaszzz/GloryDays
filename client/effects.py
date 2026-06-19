@@ -1,3 +1,4 @@
+# Client-side visual effects: damage numbers, floating text, and particle animations
 import pygame
 
 

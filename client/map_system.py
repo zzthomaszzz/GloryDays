@@ -1,3 +1,4 @@
+# Map renderer: draws tiles, obstacles, bushes, and fog-of-war
 import pygame
 import math
 from collections import deque

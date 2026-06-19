@@ -1,5 +1,7 @@
+# System: auto-attack targeting, windup timer, hit resolution, and stealth break
 from shared.constants import ATTACK_WINDUP
-from server.projectiles import Projectile, apply_damage, apply_on_hit_effects
+from server.abilities import Stealth
+from server.projectiles import Projectile, apply_damage, apply_on_hit_effects, _notify_auto_hit
 
 
 def resolve_combat(players, buildings, player_turrets, banners, dt, projectiles, proj_counter):
@@ -100,6 +102,7 @@ def _tick_attack(player, players, buildings, player_turrets, banners, dt, projec
     else:
         apply_damage(target, damage, target.armor, killer=player)
         apply_on_hit_effects(player, target)
+        _notify_auto_hit(target)
 
 
 def _fire_projectile(player, target_type, target_id, target_armor, projectiles, proj_counter, damage=None):
@@ -120,7 +123,7 @@ def _break_stealth(player):
         return
     player.is_invisible = False
     for ab in player.abilities:
-        if ab and getattr(ab, 'is_active', False) and ab.__class__.__name__ == 'Stealth':
+        if ab and getattr(ab, 'is_active', False) and isinstance(ab, Stealth):
             ab.is_active      = False
             ab.duration_timer = 0.0
 

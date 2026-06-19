@@ -1,3 +1,4 @@
+# Static map layout: obstacle rects, bush zones, and capture-point spawn positions
 import pygame
 
 OBSTACLES = [

@@ -1,3 +1,4 @@
+# Server entry point: starts the TCP listener and runs the asyncio event loop
 import asyncio
 
 from shared.constants import SERVER_HOST, SERVER_PORT, SNAPSHOT_INTERVAL

@@ -1,3 +1,4 @@
+# System: rune capture logic and rune reward triggers
 import random
 
 from shared.constants import RUNE_X, RUNE_Y, RUNE_RADIUS, RUNE_CAPTURE_TIME, RUNE_RESPAWN_TIME, RUNE_DAMAGE
@@ -48,7 +49,7 @@ def update_rune(rune, players, minerals_exhausted, dt):
 
 
 def _trigger_rune(rune, players, capturing_team):
-    from server.projectiles import apply_damage
+    from server.projectiles import apply_damage  # avoids circular import
     enemy_team    = 2 if capturing_team == 1 else 1
     alive_enemies = [p for p in players.values() if p.team == enemy_team and not p.is_dead]
     if alive_enemies:

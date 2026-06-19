@@ -1,3 +1,4 @@
+# System: ticks down status-effect timers (stun, slow, root, bleed, revealed, etc.)
 from shared.map_data import BUSHES
 
 
@@ -7,6 +8,8 @@ def tick_player_status(players, dt):
             continue
         if player.hp_regen > 0:
             player.hp = min(player.max_hp, player.hp + player.hp_regen * dt)
+        if player.mana_regen > 0:
+            player.mana = min(player.max_mana, player.mana + player.mana_regen * dt)
         if player.stun_timer > 0:
             player.stun_timer = max(0.0, player.stun_timer - dt)
         if player.slow_timer > 0:
@@ -16,7 +19,7 @@ def tick_player_status(players, dt):
         if player.root_timer > 0:
             player.root_timer = max(0.0, player.root_timer - dt)
         if player.bleed_timer > 0:
-            from server.projectiles import apply_damage
+            from server.projectiles import apply_damage  # avoids circular import
             apply_damage(player, player.bleed_dps * dt, 0)
             player.bleed_timer = max(0.0, player.bleed_timer - dt)
             if player.bleed_timer <= 0:

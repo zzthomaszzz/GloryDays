@@ -1,3 +1,4 @@
+# System: applies player velocity, enforces map bounds and obstacle collision
 import math
 
 from shared.constants import MAP_W, MAP_H

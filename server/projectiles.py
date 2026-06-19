@@ -1,3 +1,4 @@
+# Projectile classes and shared damage helpers (apply_damage, apply_on_hit_effects)
 import math
 import random
 
@@ -24,7 +25,8 @@ class Projectile:
             self.is_done = True
             return
 
-        tx, ty = target.x, target.y
+        tx = getattr(target, 'cx', target.x)
+        ty = getattr(target, 'cy', target.y)
         dx, dy = tx - self.x, ty - self.y
         dist   = math.sqrt(dx * dx + dy * dy)
         step   = self.speed * dt
@@ -34,6 +36,7 @@ class Projectile:
             apply_damage(target, self.damage, self.armor, killer=killer)
             if killer:
                 apply_on_hit_effects(killer, target)
+            _notify_auto_hit(target)
             self.is_done = True
         else:
             self.x += (dx / dist) * step
@@ -67,7 +70,7 @@ class FireballProjectile:
         step = self.SPEED * dt
         if dist <= step:
             self.is_done = True
-            from server.entities import BurningArea
+            from server.entities import BurningArea  # avoids circular import
             ba_id = ba_counter[0]
             ba_counter[0] += 1
             burning_areas[ba_id] = BurningArea(ba_id, self.target_x, self.target_y, self.owner_team, self.tick_damage)
@@ -101,7 +104,7 @@ class BoltProjectile:
     def update(self, dt, players):
         if self.is_done:
             return
-        import pygame
+        import pygame  # map_data imports pygame; deferred to keep server startup lean
         from shared.map_data import OBSTACLES
         nx = self.x + self.vx * dt
         ny = self.y + self.vy * dt
@@ -130,6 +133,82 @@ class BoltProjectile:
         }
 
 
+class HookProjectile:
+    SPEED      = 700
+    MAX_RANGE  = 400
+    HIT_RADIUS = 22
+    PULL_DIST  = 60
+    DAMAGE     = 120
+    STUN_DUR   = 0.4
+
+    def __init__(self, proj_id, owner_id, owner_team, x, y, dx, dy):
+        dist            = math.sqrt(dx * dx + dy * dy) or 1
+        self.proj_id    = proj_id
+        self.owner_id   = owner_id
+        self.owner_team = owner_team
+        self.x          = float(x)
+        self.y          = float(y)
+        self.vx         = (dx / dist) * self.SPEED
+        self.vy         = (dy / dist) * self.SPEED
+        self.traveled   = 0.0
+        self.is_done    = False
+
+    def update(self, dt, players):
+        if self.is_done:
+            return
+        import pygame  # map_data imports pygame; deferred to keep server startup lean
+        from shared.map_data import OBSTACLES
+        nx = self.x + self.vx * dt
+        ny = self.y + self.vy * dt
+        hit_box = pygame.Rect(int(nx - 4), int(ny - 4), 8, 8)
+        if any(obs.colliderect(hit_box) for obs in OBSTACLES):
+            self.is_done = True
+            return
+        self.x, self.y  = nx, ny
+        self.traveled   += self.SPEED * dt
+        if self.traveled >= self.MAX_RANGE:
+            self.is_done = True
+            return
+        for p in players.values():
+            if p.is_dead or p.team == self.owner_team:
+                continue
+            ddx = p.x - self.x
+            ddy = p.y - self.y
+            if ddx * ddx + ddy * ddy <= self.HIT_RADIUS ** 2:
+                self._apply_hook(p, players)
+                self.is_done = True
+                return
+
+    def _apply_hook(self, target, players):
+        apply_damage(target, self.DAMAGE, target.armor)
+        target.stun_timer = max(getattr(target, 'stun_timer', 0), self.STUN_DUR)
+        owner = players.get(self.owner_id)
+        if not owner or owner.is_dead:
+            return
+        dx   = owner.x - target.x
+        dy   = owner.y - target.y
+        dist = math.sqrt(dx * dx + dy * dy)
+        if dist <= self.PULL_DIST:
+            return
+        ratio    = (dist - self.PULL_DIST) / dist
+        target.x += dx * ratio
+        target.y += dy * ratio
+
+    def to_dict(self):
+        return {
+            "x":          round(self.x, 1),
+            "y":          round(self.y, 1),
+            "owner_id":   self.owner_id,
+            "owner_team": self.owner_team,
+        }
+
+
+def _notify_auto_hit(target):
+    for ab in getattr(target, 'abilities', []):
+        if ab is not None and hasattr(ab, 'on_auto_hit'):
+            ab.on_auto_hit(target)
+
+
 def _resolve_target(target_type, target_id, players, buildings, player_turrets, banners):
     match target_type:
         case "player":   return players.get(target_id)
@@ -142,7 +221,7 @@ def _resolve_target(target_type, target_id, players, buildings, player_turrets, 
 def apply_on_hit_effects(attacker, target):
     if not hasattr(target, 'armor_reduction_timer'):
         return
-    if any(item and item.get('name') == 'Fang' for item in getattr(attacker, 'inventory', [])):
+    if any(item == 'Fang' for item in getattr(attacker, 'inventory', [])):
         target.armor_reduction = 10
         target.armor_reduction_timer = 3.0
 

@@ -2,26 +2,45 @@
 
 ## Releasing a new version
 
-Build with PyInstaller first:
+### Step 0 — Bump the version (REQUIRED)
+
+Update `GAME_VERSION` in `shared/constants.py` to match the new release tag **before building**. The server rejects clients whose version string doesn't match, so a mismatch will prevent anyone from joining.
+
+```python
+# shared/constants.py
+GAME_VERSION = "1.X"   # ← change this to the new version number
+```
+
+Also update the zip filename and GitHub release tag in the commands below to match.
+
+### Step 1 — Build with PyInstaller
 ```
 C:\Users\Thomas\AppData\Local\Programs\Python\Python312\Scripts\pyinstaller.exe main.spec
 ```
 
-Copy assets into dist (PyInstaller does NOT do this automatically):
+### Step 2 — Copy assets into dist (PyInstaller does NOT do this automatically)
 ```powershell
 Remove-Item -Path "dist\asset" -Recurse -Force -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Path "dist\asset" | Out-Null
 Get-ChildItem "asset" | Copy-Item -Destination "dist\asset" -Recurse -Force
 ```
 
-Zip the dist folder:
+### Step 3 — Zip the dist folder
 ```powershell
-Compress-Archive -Path "dist\main.exe", "dist\asset" -DestinationPath "GloryDay_v1.2.zip" -Force
+Compress-Archive -Path "dist\main.exe", "dist\asset" -DestinationPath "GloryDay_vX.X.zip" -Force
 ```
 
-Create GitHub release:
+### Step 4 — Create GitHub release
 ```
-gh release create v1.2 "GloryDay_v1.2.zip" --repo zzthomaszzz/Glory_days_beta --title "GloryDay Beta v1.2" --notes "..."
+gh release create vX.X "GloryDay_vX.X.zip" --repo zzthomaszzz/Glory_days_beta --title "GloryDay Beta vX.X" --notes "..."
 ```
+
+### Commit message checklist
+
+When writing the release commit message, include any balance changes made since the last release:
+
+- **Hero stat changes** — check `shared/heroes.py` diff for changes to hp, mana, attack_damage, attack_speed, armor, etc.
+- **Item stat changes** — check `shared/items.py` diff for changes to item stats
+- **Ability stat changes** — check `ABILITY_STATS` in `server/abilities.py` for cooldown, damage, or range tweaks
 
 Releases: https://github.com/zzthomaszzz/Glory_days_beta/releases

@@ -1,4 +1,4 @@
-# server/net.py
+# TCP server: connection handling, version check, broadcast loop, and game reset
 
 import asyncio
 import json
@@ -6,6 +6,7 @@ import socket
 
 from server.game_state import GameState
 from shared.protocol import make_snapshot
+from shared.constants import GAME_VERSION
 
 
 class GameServer:
@@ -17,6 +18,7 @@ class GameServer:
 
         self.writers = {}
         self.next_player_id = 0
+        self._end_timer = None
 
     async def run(self):
         server = await asyncio.start_server(self.handle_client, self.host, self.port)
@@ -51,12 +53,38 @@ class GameServer:
                     continue
                 try:
                     hero_msg = json.loads(stripped.decode())
-                    hero_name = hero_msg.get("hero", "Player") if hero_msg.get("type") == "hero_select" else "Player"
+                    if hero_msg.get("type") == "status":
+                        reply = {
+                            "type":         "status_reply",
+                            "player_count": len(self.game_state.players),
+                            "max_players":  6,
+                            "game_phase":   self.game_state.game_phase,
+                        }
+                        writer.write((json.dumps(reply) + "\n").encode())
+                        await writer.drain()
+                        writer.close()
+                        return
+                    if hero_msg.get("type") != "hero_select":
+                        break
+                    if hero_msg.get("version") != GAME_VERSION:
+                        reply = {"type": "error", "msg": f"Version mismatch — server requires v{GAME_VERSION}. Please update your client."}
+                        writer.write((json.dumps(reply) + "\n").encode())
+                        await writer.drain()
+                        writer.close()
+                        return
+                    hero_name = hero_msg.get("hero", "Player")
                     break
                 except Exception:
                     continue
         except Exception as e:
             print(f"[!] Player {player_id} handshake failed: {e}")
+            writer.close()
+            return
+
+        if self.game_state.game_phase == "ended":
+            reply = {"type": "error", "msg": "Server is resetting after the last game. Try again in a moment."}
+            writer.write((json.dumps(reply) + "\n").encode())
+            await writer.drain()
             writer.close()
             return
 
@@ -109,6 +137,8 @@ class GameServer:
                 rune=self.game_state.rune,
                 traps=self.game_state.traps,
                 bolt_projectiles=self.game_state.bolt_projectiles,
+                hook_projectiles=self.game_state.hook_projectiles,
+                winner=self.game_state.winner,
             )
             data = (json.dumps(snapshot) + "\n").encode()
 
@@ -119,3 +149,27 @@ class GameServer:
                     pass
 
             await asyncio.sleep(self.snapshot_interval)
+
+            if self.game_state.game_phase == "ended":
+                if self._end_timer is None:
+                    self._end_timer = 8.0
+                else:
+                    self._end_timer -= self.snapshot_interval
+                    if self._end_timer <= 0:
+                        await self._reset_game()
+            elif self.game_state.game_phase in ("live", "countdown") and not self.writers:
+                print("[server] All players left — resetting lobby")
+                await self._reset_game()
+
+    async def _reset_game(self):
+        for writer in list(self.writers.values()):
+            try:
+                writer.close()
+                await writer.wait_closed()
+            except Exception:
+                pass
+        self.writers.clear()
+        self.game_state = GameState()
+        self.next_player_id = 0
+        self._end_timer = None
+        print("[server] Game reset — new lobby ready")

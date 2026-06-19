@@ -1,3 +1,4 @@
+# Game-wide constants and GAME_VERSION (bump before each release — server rejects mismatched clients)
 #Network
 CLIENT_INPUT_INTERVAL = 0.025
 SNAPSHOT_INTERVAL = 0.05
@@ -46,3 +47,9 @@ CAPTURE_RADIUS = 48    # px from point centre that counts as "standing on"
 CAPTURE_SIZE   = 32    # building tile size
 CAPTURE_VISION = 75   # fog vision radius
 CAPTURE_HP     = 300   # HP before the point resets to neutral
+
+#Official server
+OFFICIAL_SERVER_HOST = "209.25.142.17"
+OFFICIAL_SERVER_PORT = 1087
+
+GAME_VERSION = "1.6"

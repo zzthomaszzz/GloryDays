@@ -1,10 +1,11 @@
+# Async game loop: initialises pygame, runs the active scene, and drives the network coroutine
 import asyncio
 
 import pygame
 
 import client.scene as scene_mod
 from shared.constants import FPS
-from client.scene import SceneHeroSelect, VIEWPORT_W, VIEWPORT_H
+from client.scene import SceneMenu, VIEWPORT_W, VIEWPORT_H
 
 
 async def main():
@@ -24,7 +25,7 @@ async def main():
     ui_surf   = pygame.Surface((sw, sh), pygame.SRCALPHA)
     clock     = pygame.time.Clock()
 
-    active_scene = SceneHeroSelect()
+    active_scene = SceneMenu()
 
     while active_scene is not None:
         events = pygame.event.get()

@@ -1,3 +1,4 @@
+# System: drives ability cooldown timers and tick callbacks each frame
 def update_abilities(players, dt, game_state=None):
     for player in players.values():
         for ability in player.abilities:

@@ -1,4 +1,6 @@
+# Authoritative game state: update loop, input dispatch, win detection
 from server.entities import Player, HERO_REGISTRY
+from server.abilities import Stealth
 from server.systems.combat import _break_stealth
 from server.buildings import BuildingHeadquarter, CapturePoint, ShopBuilding
 from server.systems.movement import apply_movement
@@ -32,9 +34,10 @@ class GameState:
         self.traps                 = {}
         self._trap_counter         = [0]
         self.bolt_projectiles      = {}
+        self.hook_projectiles      = {}
         self.buildings = {
-            0: BuildingHeadquarter(1, 0, 0),
-            1: BuildingHeadquarter(2, 1232, 752),
+            0: BuildingHeadquarter(1, 32, 32),
+            1: BuildingHeadquarter(2, 1200, 720),
         }
         self.match_time = 0.0
 
@@ -60,9 +63,10 @@ class GameState:
             "capturer_team":  None,
         }
 
-    def add_player(self, player_id, team, hero_name="Player"):
-        hero_class = HERO_REGISTRY.get(hero_name, Player)
-        player = hero_class(player_id, team)
+    def add_player(self, player_id, team, hero_name="Soldier"):
+        if hero_name not in HERO_REGISTRY:
+            hero_name = 'Soldier'
+        player = Player(player_id, team, hero_name)
         spawn = SPAWN_POSITIONS[team]
         player.x = spawn[0]
         player.y = spawn[1]
@@ -93,7 +97,7 @@ class GameState:
                         target_pos = (tx, ty) if tx is not None and ty is not None else None
                         tid = msg.get("ability_target_id")
                         targets = [int(tid)] if tid is not None else None
-                        if ability.__class__.__name__ != 'Stealth':
+                        if not isinstance(ability, Stealth):
                             _break_stealth(player)
                         ability.use(player, targets=targets, target_pos=target_pos, game_state=self)
             case "buy_item":
@@ -179,6 +183,9 @@ class GameState:
         for bolt in list(self.bolt_projectiles.values()):
             bolt.update(dt, self.players)
         self.bolt_projectiles = {k: v for k, v in self.bolt_projectiles.items() if not v.is_done}
+        for hook in list(self.hook_projectiles.values()):
+            hook.update(dt, self.players)
+        self.hook_projectiles = {k: v for k, v in self.hook_projectiles.items() if not v.is_done}
         self._handle_respawns(dt)
 
         # Live-only: gold income, capture logic, win condition
@@ -222,24 +229,23 @@ class GameState:
     def _check_win(self):
         if self.winner is not None:
             return
-        exhausted = self._minerals_exhausted()
-        all_caps_gone = not any(
-            isinstance(b, CapturePoint) and not b.is_destroyed
-            for b in self.buildings.values()
-        )
+        # Primary: destroy the enemy HQ
         for team in (1, 2):
             enemy = 2 if team == 1 else 1
             enemy_hq_down = not any(
                 isinstance(b, BuildingHeadquarter) and b.team == enemy and not b.is_destroyed
                 for b in self.buildings.values()
             )
-            # Annihilation: enemy HQ + all capture zones destroyed
-            if enemy_hq_down and all_caps_gone:
+            if enemy_hq_down:
                 self.winner = team
+                self.game_phase = "ended"
                 return
-            # Attrition: minerals exhausted + all enemies permanently dead
-            if exhausted:
+        # Secondary (attrition): minerals exhausted + all enemies permanently dead
+        if self._minerals_exhausted():
+            for team in (1, 2):
+                enemy = 2 if team == 1 else 1
                 enemy_players = [p for p in self.players.values() if p.team == enemy]
                 if enemy_players and all(p.is_dead for p in enemy_players):
                     self.winner = team
+                    self.game_phase = "ended"
                     return

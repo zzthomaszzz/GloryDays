@@ -3,6 +3,7 @@ import json
 import socket
 import time
 from shared.protocol import make_input_message, make_hero_select_message
+from shared.constants import GAME_VERSION
 
 
 class NetworkClient:
@@ -20,6 +21,7 @@ class NetworkClient:
 
         self.my_player_id = None
         self.my_team = None
+        self.is_connected = True
 
     async def connect(self):
         self.reader, self.writer = await asyncio.open_connection(self.host, self.port)
@@ -31,6 +33,8 @@ class NetworkClient:
         deadline = time.time() + timeout
         while self.my_player_id is None:
             if time.time() > deadline:
+                return False
+            if not self.is_connected:
                 return False
             await asyncio.sleep(0.05)
         return True
@@ -57,11 +61,13 @@ class NetworkClient:
             self.previous_snapshot = self.latest_snapshot
             self.latest_snapshot = msg
             self.last_snapshot_time = time.time()
+        self.is_connected = False
 
     async def send_hero_select(self, hero_name):
         if self.writer is None or self.writer.is_closing():
             return
         payload = make_hero_select_message(hero_name)
+        payload["version"] = GAME_VERSION
         data = (json.dumps(payload) + "\n").encode()
         try:
             self.writer.write(data)
@@ -153,3 +159,18 @@ class NetworkClient:
 
     def get_entity_ids(self, category):
         return list(self.latest_snapshot.get(category, {}).keys())
+
+
+async def ping_server(host, port, timeout=4.0):
+    try:
+        reader, writer = await asyncio.wait_for(
+            asyncio.open_connection(host, port), timeout=timeout
+        )
+        writer.write((json.dumps({"type": "status"}) + "\n").encode())
+        await writer.drain()
+        line = await asyncio.wait_for(reader.readline(), timeout=timeout)
+        data = json.loads(line.decode())
+        writer.close()
+        return {"online": True, **data}
+    except Exception:
+        return {"online": False}

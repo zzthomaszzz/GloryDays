@@ -1,70 +1,78 @@
+# Player class, HERO_ABILITIES, HERO_REGISTRY, and misc server-side entities
+# (Trap, BurningArea, PlayerTurret, Banner).
+# Stats and display data live in shared/heroes.py; only ability class references
+# belong here since those can't be in a shared module.
+from shared.heroes import HERO_STATS
 from server.abilities import (
     Snipe, PlaceTurret, Dash,
     Fireball, Mend, Teleport,
     Charge, GroundSlam, Fortify,
     Spin, Bushido, PlaceBanner,
     Stealth, PlaceTrap, Bolt,
-    Recall,
+    Recall, Hook, IronStack, BattleCry,
 )
+
+# Ability class loadouts — parallel to HERO_STATS in shared/heroes.py.
+# When adding a new hero, add its entry here AND in shared/heroes.py.
+HERO_ABILITIES = {
+    'Soldier': [Snipe, PlaceTurret, Dash, Recall],
+    'Mage':    [Fireball, Mend, Teleport, Recall],
+    'Hunter':  [Charge, GroundSlam, Fortify, Recall],
+    'Samurai': [Spin, Bushido, PlaceBanner, Recall],
+    'Rat':     [Stealth, PlaceTrap, Bolt, Recall],
+    'Watcher': [Hook, IronStack, BattleCry, Recall],
+}
+
+HERO_REGISTRY = set(HERO_STATS)
 
 
 class EntityBase:
     def __init__(self, size, x, y, vision):
-        self.size = size
-        self.x = x
-        self.y = y
+        self.size   = size
+        self.x      = x
+        self.y      = y
         self.vision = vision
 
 
 class Player(EntityBase):
-    #Base stats — override per hero subclass
-    BASE_HP            = 550
-    BASE_MANA          = 300
-    BASE_ATTACK_DAMAGE = 55
-    BASE_ABILITY_POWER = 0
-    BASE_ATTACK_RANGE  = 50
-    BASE_ATTACK_SPEED  = 0.65
-    BASE_CRIT_CHANCE   = 0.0
-    BASE_ARMOR         = 25
-    BASE_MAGIC_RESIST  = 30
-    BASE_SPEED         = 100
-    BASE_VISION        = 200
+    def __init__(self, player_id, team, hero_name='Soldier'):
+        _s = HERO_STATS.get(hero_name, HERO_STATS['Soldier'])
+        super().__init__(32, 0, 0, _s['vision'])
 
-    is_ranged  = False
-    proj_speed = 0
-
-    default_abilities = [None, None, None, None]
-
-    def __init__(self, player_id, team):
-        super().__init__(32, 0, 0, self.BASE_VISION)
         #Identity
-        self.id = player_id
+        self.hero = hero_name
+        self.id   = player_id
         self.team = team
 
         #Vitals
-        self.hp = self.BASE_HP
-        self.max_hp = self.BASE_HP
-        self.mana = self.BASE_MANA
-        self.max_mana = self.BASE_MANA
+        self.hp       = _s['hp']
+        self.max_hp   = _s['hp']
+        self.mana     = _s['mana']
+        self.max_mana = _s['mana']
 
         #Offense
-        self.attack_damage = self.BASE_ATTACK_DAMAGE
-        self.ability_power = self.BASE_ABILITY_POWER
-        self.attack_range  = self.BASE_ATTACK_RANGE
-        self.attack_speed  = self.BASE_ATTACK_SPEED
+        self.attack_damage = _s['attack_damage']
+        self.ability_power = _s['ability_power']
+        self.attack_range  = _s['attack_range']
+        self.attack_speed  = _s['attack_speed']
         self.attack_timer  = 0.0
-        self.crit_chance   = self.BASE_CRIT_CHANCE
+        self.crit_chance   = _s['crit_chance']
 
         #Defense
-        self.armor        = self.BASE_ARMOR
-        self.magic_resist = self.BASE_MAGIC_RESIST
+        self.armor        = _s['armor']
+        self.magic_resist = _s['magic_resist']
 
         #Mobility
-        self.speed = self.BASE_SPEED
+        self.speed = _s['speed']
+
+        #Combat type
+        self.is_ranged  = _s['is_ranged']
+        self.proj_speed = _s['proj_speed']
 
         #Economy
-        self.gold     = 0
-        self.hp_regen = 0.0
+        self.gold       = 0
+        self.hp_regen   = 0.0
+        self.mana_regen = 0.0
 
         #Inventory
         self.inventory = [None] * 6
@@ -74,22 +82,22 @@ class Player(EntityBase):
         self.dy = 0
 
         #Abilities
-        self.abilities = [A() if A else None for A in self.__class__.default_abilities]
+        self.abilities = [A() for A in HERO_ABILITIES.get(hero_name, [])]
 
         #Status
-        self.attack_target = None
-        self.is_dead = False
-        self.respawn_timer = 0.0
-        self.is_attacking = False
+        self.attack_target       = None
+        self.is_dead             = False
+        self.respawn_timer       = 0.0
+        self.is_attacking        = False
         self.attack_windup_timer = 0.0
-        self.stun_timer  = 0.0
-        self.slow_timer  = 0.0
-        self.slow_factor = 1.0
-        self.root_timer  = 0.0
+        self.stun_timer          = 0.0
+        self.slow_timer          = 0.0
+        self.slow_factor         = 1.0
+        self.root_timer          = 0.0
         self.armor_reduction       = 0
         self.armor_reduction_timer = 0.0
-        self.bleed_timer  = 0.0
-        self.bleed_dps    = 0.0
+        self.bleed_timer          = 0.0
+        self.bleed_dps            = 0.0
         self.revealed_timer       = 0.0
         self.is_invisible         = False
         self._stealth_bonus_ready = False
@@ -97,124 +105,34 @@ class Player(EntityBase):
 
     def to_dict(self):
         return {
-            "id": self.id,
-            "hero": self.__class__.__name__,
-            "team": self.team,
-            "pos": [self.x, self.y],
-            "hp": self.hp,
-            "max_hp": self.max_hp,
-            "mana": self.mana,
-            "max_mana": self.max_mana,
+            "id":           self.id,
+            "hero":         self.hero,
+            "team":         self.team,
+            "pos":          [self.x, self.y],
+            "hp":           self.hp,
+            "max_hp":       self.max_hp,
+            "mana":         self.mana,
+            "max_mana":     self.max_mana,
             "attack_damage": self.attack_damage,
             "ability_power": self.ability_power,
             "attack_range": self.attack_range,
-            "armor": self.armor,
+            "armor":        self.armor,
             "magic_resist": self.magic_resist,
-            "speed": self.speed,
-            "gold": self.gold,
-            "vision": self.vision,
-            "is_dead": self.is_dead,
-            "respawn_timer": round(self.respawn_timer, 2),
+            "speed":        self.speed,
+            "gold":         self.gold,
+            "vision":       self.vision,
+            "is_dead":      self.is_dead,
+            "respawn_timer":  round(self.respawn_timer,  2),
             "stun_timer":     round(self.stun_timer,     2),
             "slow_timer":     round(self.slow_timer,     2),
             "root_timer":     round(self.root_timer,     2),
             "bleed_timer":    round(self.bleed_timer,    2),
             "revealed_timer": round(self.revealed_timer, 2),
-            "is_invisible":   self.is_invisible,
-            "bush_idx":       self.bush_idx,
-            "abilities": [a.to_dict() if a else None for a in self.abilities],
-            "inventory": self.inventory[:],
+            "is_invisible": self.is_invisible,
+            "bush_idx":     self.bush_idx,
+            "abilities":    [a.to_dict() if a else None for a in self.abilities],
+            "inventory":    self.inventory[:],
         }
-
-
-#-------------------------------------------------------------------------------------------------------------------Soldier
-class Soldier(Player):
-    BASE_HP            = 420
-    BASE_ATTACK_DAMAGE = 75
-    BASE_ATTACK_RANGE  = 150
-    BASE_ATTACK_SPEED  = 1
-    BASE_SPEED         = 115
-    BASE_VISION        = 150
-    is_ranged          = True
-    proj_speed         = 400
-
-    default_abilities  = [Snipe, PlaceTurret, Dash, Recall]
-
-
-#-------------------------------------------------------------------------------------------------------------------Mage
-class Mage(Player):
-    BASE_HP            = 400
-    BASE_MANA          = 350
-    BASE_ATTACK_DAMAGE = 30
-    BASE_ABILITY_POWER = 70
-    BASE_ATTACK_RANGE  = 120
-    BASE_ATTACK_SPEED  = 0.75
-    BASE_ARMOR         = 15
-    BASE_MAGIC_RESIST  = 20
-    BASE_SPEED         = 110
-    BASE_VISION        = 180
-    is_ranged          = True
-    proj_speed         = 250
-
-    default_abilities  = [Fireball, Mend, Teleport, Recall]
-
-
-#-------------------------------------------------------------------------------------------------------------------Hunter
-class Hunter(Player):
-    BASE_HP            = 530
-    BASE_ATTACK_DAMAGE = 80
-    BASE_ATTACK_RANGE  = 50
-    BASE_ATTACK_SPEED  = 0.9
-    BASE_ARMOR         = 40
-    BASE_MAGIC_RESIST  = 25
-    BASE_SPEED         = 120
-    BASE_VISION        = 150
-    is_ranged          = False
-    proj_speed         = 0
-
-    default_abilities  = [Charge, GroundSlam, Fortify, Recall]
-
-
-#-------------------------------------------------------------------------------------------------------------------Samurai
-class Samurai(Player):
-    BASE_HP            = 480
-    BASE_ATTACK_DAMAGE = 70
-    BASE_ATTACK_RANGE  = 60
-    BASE_ATTACK_SPEED  = 0.9
-    BASE_ARMOR         = 22
-    BASE_SPEED         = 110
-    is_ranged          = False
-    proj_speed         = 0
-
-    default_abilities  = [Spin, Bushido, PlaceBanner, Recall]
-
-
-#-------------------------------------------------------------------------------------------------------------------Rat
-class Rat(Player):
-    BASE_HP            = 360
-    BASE_MANA          = 260
-    BASE_ATTACK_DAMAGE = 50
-    BASE_ABILITY_POWER = 25
-    BASE_ATTACK_RANGE  = 130
-    BASE_ATTACK_SPEED  = 0.75
-    BASE_ARMOR         = 12
-    BASE_MAGIC_RESIST  = 20
-    BASE_SPEED         = 130
-    BASE_VISION        = 170
-    is_ranged          = True
-    proj_speed         = 300
-
-    default_abilities  = [Stealth, PlaceTrap, Bolt, Recall]
-
-
-#-------------------------------------------------------------------------------------------------------------------Registry
-HERO_REGISTRY = {
-    "Soldier": Soldier,
-    "Mage":    Mage,
-    "Hunter":  Hunter,
-    "Samurai": Samurai,
-    "Rat":     Rat,
-}
 
 
 #-------------------------------------------------------------------------------------------------------------------Trap
@@ -294,7 +212,7 @@ class BurningArea:
             self._tick_damage(players, player_turrets)
 
     def _tick_damage(self, players, player_turrets):
-        from server.projectiles import apply_damage
+        from server.projectiles import apply_damage  # avoids circular import
         half = self.SIZE // 2
         for p in players.values():
             if p.is_dead or p.team == self.owner_team:
@@ -330,22 +248,22 @@ class PlayerTurret:
     PROJ_SPEED = 200
 
     def __init__(self, turret_id, owner_id, team, x, y):
-        self.id           = turret_id
-        self.owner_id     = owner_id
-        self.team         = team
-        self.x            = x
-        self.y            = y
-        self.hp           = self.HP
-        self.max_hp       = self.HP
-        self.armor        = self.ARMOR
-        self.attack_range = self.ATK_RANGE
+        self.id            = turret_id
+        self.owner_id      = owner_id
+        self.team          = team
+        self.x             = x
+        self.y             = y
+        self.hp            = self.HP
+        self.max_hp        = self.HP
+        self.armor         = self.ARMOR
+        self.attack_range  = self.ATK_RANGE
         self.attack_damage = self.ATK_DMG
-        self.attack_speed = self.ATK_SPEED
-        self.vision       = self.VISION
-        self.size         = self.SIZE
-        self.proj_speed   = self.PROJ_SPEED
-        self.attack_timer = 0.0
-        self.is_destroyed = False
+        self.attack_speed  = self.ATK_SPEED
+        self.vision        = self.VISION
+        self.size          = self.SIZE
+        self.proj_speed    = self.PROJ_SPEED
+        self.attack_timer  = 0.0
+        self.is_destroyed  = False
 
     def to_dict(self):
         return {

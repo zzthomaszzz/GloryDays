@@ -1,3 +1,4 @@
+# Building classes: ShopBuilding, BuildingBase, BuildingHeadquarter, CapturePoint
 from shared.constants import (
     BASE_VISION, BUILDING_SIZE,
     MINERAL_START, CAPTURE_MINERAL_START, MINERALS_PER_TICK, GOLD_PER_MINERAL, GOLD_TICK_INTERVAL,
@@ -37,6 +38,12 @@ class BuildingBase:
         self.armor  = armor
         self.is_destroyed = False
 
+    @property
+    def cx(self): return self.x + self.size / 2
+
+    @property
+    def cy(self): return self.y + self.size / 2
+
     def update(self, dt, players): pass
 
     def to_dict(self):
@@ -56,7 +63,7 @@ class BuildingBase:
 #-------------------------------------------------------------------------------------------------------------------HQ
 class BuildingHeadquarter(BuildingBase):
     def __init__(self, team, x, y):
-        super().__init__(BUILDING_SIZE, x, y, BASE_VISION, hp=1000, armor=30)
+        super().__init__(BUILDING_SIZE, x, y, BASE_VISION, hp=800, armor=10)
         self.team         = team
         self.mineral_pool = MINERAL_START
         self._gold_timer  = 0.0

@@ -1,3 +1,4 @@
+# System: buy and sell item logic; applies stat deltas directly to the player
 from shared.items import ITEMS
 
 
@@ -13,7 +14,7 @@ def handle_purchase(player, item_key, shops):
         return
     if player.gold < item["cost"]:
         return
-    empty = next((i for i, slot in enumerate(player.inventory) if slot is None and i < 3), None)
+    empty = next((i for i, slot in enumerate(player.inventory) if slot is None and i < 6), None)
     if empty is None:
         return
     player.gold -= item["cost"]
@@ -23,7 +24,7 @@ def handle_purchase(player, item_key, shops):
 
 
 def handle_sell(player, slot):
-    if not (0 <= slot < 3):
+    if not (0 <= slot < 6):
         return
     item_key = player.inventory[slot]
     if item_key not in ITEMS:

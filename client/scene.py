@@ -1,20 +1,23 @@
+# Scene classes: SceneMenu, SceneConnecting, and SceneTest (the main gameplay scene)
 import os
 import math
 import pygame
 import asyncio
 
-from client.net import NetworkClient
+from client.net import NetworkClient, ping_server
 from client.map_system import MapSystem
 from client.effects import EffectsSystem, target_is_gone
-from client.hud import HudRenderer, TEAM_COLOURS, MINI_W, MINI_H, MINI_SX, MINI_SY
+from client.hud import HudRenderer, TEAM_COLOURS, MINI_W, MINI_H, MINI_SX, MINI_SY, _build_item_icons
 from shared.constants import (
     CLIENT_INPUT_INTERVAL, BASE_VISION, TURRET_VISION,
     CLIENT_DEFAULT_HOST, SERVER_PORT, SNAPSHOT_INTERVAL,
     MAP_W, MAP_H,
     RUNE_X, RUNE_Y, RUNE_RADIUS, RUNE_CAPTURE_TIME,
+    OFFICIAL_SERVER_HOST, OFFICIAL_SERVER_PORT,
 )
 from shared.map_data import OBSTACLES, SPAWN_ZONES, BUSHES, CAPTURE_ZONES
 from shared.items import ITEMS, ITEM_KEYS
+from shared.heroes import HERO_STATS as _HERO_DATA
 
 import sys
 if getattr(sys, "frozen", False):
@@ -41,372 +44,447 @@ HERO_ASSET_MAP = {
     "Hunter":  os.path.join(_ROOT, "asset", "hunter.png"),
     "Samurai": os.path.join(_ROOT, "asset", "samurai.png"),
     "Rat":     os.path.join(_ROOT, "asset", "rat.png"),
+    "Watcher": os.path.join(_ROOT, "asset", "watcher.png"),
     "Player":  os.path.join(_ROOT, "asset", "default_player.png"),
 }
 
 _HERO_CARDS = [
     {
-        "name":  "Soldier",
-        "desc":  "Ranged fighter with precision shots and turret support.",
-        "stats": {"HP": 420, "Damage": 75, "Range": 150, "Speed": 115, "Armor": 25},
-        "abilities": [
-            ("Q", "Snipe",        "Targeted long-range shot"),
-            ("E", "Place Turret", "Deploy an auto-attacking turret"),
-            ("R", "Dash",         "Dash in your movement direction"),
-        ],
-    },
-    {
-        "name":  "Mage",
-        "desc":  "Burst caster who excels at area control and healing.",
-        "stats": {"HP": 400, "Damage": 30, "Range": 120, "Speed": 110, "Armor": 15},
-        "abilities": [
-            ("Q", "Fireball",  "Launch a fireball that burns an area"),
-            ("E", "Mend",      "Channel to heal a target ally"),
-            ("R", "Teleport",  "Channel to teleport to a location"),
-        ],
-    },
-    {
-        "name":  "Hunter",
-        "desc":  "Tanky melee brawler who charges and stuns enemies.",
-        "stats": {"HP": 530, "Damage": 80, "Range": 50, "Speed": 120, "Armor": 40},
-        "abilities": [
-            ("Q", "Charge",      "Dash to an enemy, stunning them"),
-            ("E", "Ground Slam", "AOE slam dealing 50 damage nearby"),
-            ("R", "Fortify",     "Gain damage reduction for 5 seconds"),
-        ],
-    },
-    {
-        "name":  "Samurai",
-        "desc":  "Disciplined melee duelist with crit lifesteal and a healing banner.",
-        "stats": {"HP": 480, "Damage": 70, "Range": 60, "Speed": 110, "Armor": 22},
-        "abilities": [
-            ("Q", "Spin",        "Spin for 5s, dealing 25 dmg every 0.5s in a circle"),
-            ("E", "Bushido",     "Passive: 25% crit for 1.4x dmg, heal for damage dealt"),
-            ("R", "Place Banner","Deploy a banner healing allies 2% HP/s for 10s (1 HP)"),
-        ],
-    },
-    {
-        "name":  "Rat",
-        "desc":  "Sneaky ranged assassin who ambushes from stealth and sets deadly traps.",
-        "stats": {"HP": 360, "Damage": 50, "Range": 130, "Speed": 130, "Armor": 12},
-        "abilities": [
-            ("Q", "Stealth",    "Turn invisible for 12s — first attack deals 1.5x damage"),
-            ("E", "Place Trap", "Place a trap (max 3) that roots and bleeds enemies for 2s"),
-            ("R", "Bolt",       "Fire a slow heavy bolt that breaks on terrain, deals 280 dmg"),
-        ],
-    },
+        "name":      name,
+        "desc":      data['desc'],
+        "stats":     {
+            "HP":     data['hp'],
+            "Damage": data['attack_damage'],
+            "Range":  data['attack_range'],
+            "Speed":  data['speed'],
+            "Armor":  data['armor'],
+        },
+        "abilities": data['ability_descs'],
+    }
+    for name, data in _HERO_DATA.items()
 ]
 
 
-def _hs_layout():
-    sw, sh  = _SCREEN_W, _SCREEN_H
-    left_w  = sw * 2 // 3
-    right_w = sw - left_w
-
-    n       = len(_HERO_CARDS)
-    COLS    = 3
-    rows    = math.ceil(n / COLS)
-    pad     = int(left_w * 0.05)
-    gap     = int(left_w * 0.02)
-    row_gap = 10
-
-    card_w  = (left_w - 2 * pad - (COLS - 1) * gap) // COLS
-    avail_h = int(sh * 0.68)
-    card_h  = min(int(sh * 0.50), (avail_h - (rows - 1) * row_gap) // rows)
-    card_y  = int(sh * 0.18)
-
-    cards = []
-    for i in range(n):
-        col              = i % COLS
-        row              = i // COLS
-        cards_in_row     = min(COLS, n - row * COLS)
-        row_x_offset     = (COLS - cards_in_row) * (card_w + gap) // 2
-        cx = pad + row_x_offset + col * (card_w + gap)
-        cy = card_y + row * (card_h + row_gap)
-        cards.append(pygame.Rect(cx, cy, card_w, card_h))
-
-    right_cx = left_w + right_w // 2
-    btn_w    = int(right_w * 0.62)
-    btn_h    = int(sh * 0.056)
-    btn_x    = right_cx - btn_w // 2
-    btn_y    = int(sh * 0.88)
-
-    last_card_bottom = card_y + rows * card_h + (rows - 1) * row_gap
-    inp_w = int(left_w * 0.32)
-    inp_h = int(sh * 0.038)
-    inp_x = (left_w - inp_w) // 2
-    inp_y = last_card_bottom + int(sh * 0.03)
-
-    return {
-        "left_w": left_w, "right_w": right_w,
-        "cards": cards, "card_w": card_w, "card_h": card_h,
-        "btn_w": btn_w, "btn_h": btn_h, "btn_x": btn_x, "btn_y": btn_y,
-        "inp_w": inp_w, "inp_h": inp_h, "inp_x": inp_x, "inp_y": inp_y,
-    }
+async def _do_ping_idx(scene, idx):
+    srv    = scene._servers[idx]
+    result = await ping_server(srv["host"], srv["port"])
+    scene._server_infos[idx] = result
 
 
-#-------------------------------------------------------------------------------------------------------------------HeroSelect
-class SceneHeroSelect:
+#-------------------------------------------------------------------------------------------------------------------Menu
+class SceneMenu:
+    _PING_INTERVAL = 10.0
+
     def __init__(self):
-        self.next_scene    = self
-        self.chosen_hero   = None
-        self._hovered      = None
-        self._server_addr  = f"{CLIENT_DEFAULT_HOST}:{SERVER_PORT}"
-        self._addr_focused = False
-        self._cursor_timer = 0.0
-        self._cursor_vis   = True
+        self.next_scene      = self
+        self._chosen         = "Soldier"
+        self._servers        = [
+            {"name": "Official Server", "addr": f"{OFFICIAL_SERVER_HOST}:{OFFICIAL_SERVER_PORT}",
+             "host": OFFICIAL_SERVER_HOST, "port": OFFICIAL_SERVER_PORT},
+            {"name": "Local Server",    "addr": f"{CLIENT_DEFAULT_HOST}:{SERVER_PORT}",
+             "host": CLIENT_DEFAULT_HOST, "port": SERVER_PORT},
+        ]
+        self._server_infos   = [{"online": None} for _ in self._servers]
+        self._sel_server     = 0
+        self._ping_timer     = 0.0
+        self._hovered_row    = None
 
-        lay = _hs_layout()
         sw, sh = _SCREEN_W, _SCREEN_H
-        left_w = lay["left_w"]
-        cw, ch = lay["card_w"], lay["card_h"]
-        self._left_w = left_w
 
-        self._card_rects_ui = lay["cards"]
-        self._btn_rect_ui   = pygame.Rect(lay["btn_x"], lay["btn_y"], lay["btn_w"], lay["btn_h"])
-        self._input_rect_ui = pygame.Rect(lay["inp_x"], lay["inp_y"], lay["inp_w"], lay["inp_h"])
+        self._L       = int(sw * 0.23)
+        self._M       = int(sw * 0.43)
+        self._title_h = int(sh * 0.11)
 
-        raw_bg = pygame.image.load(os.path.join(_ROOT, "asset", "lobby.png")).convert()
-        self._bg_ui      = pygame.transform.smoothscale(raw_bg, (sw, sh))
-        self._overlay_ui = pygame.Surface((sw, sh), pygame.SRCALPHA)
-        self._overlay_ui.fill((0, 0, 0, 160))
+        row_h   = int(sh * 0.10)
+        row_gap = int(sh * 0.014)
+        row_x   = int(self._L * 0.05)
+        row_w   = int(self._L * 0.90)
+        start_y = self._title_h + int(sh * 0.05)
+        self._hero_rows = [
+            pygame.Rect(row_x, start_y + i * (row_h + row_gap), row_w, row_h)
+            for i in range(len(_HERO_CARDS))
+        ]
 
-        # Card portraits (big, fill most of card)
-        self._portraits_card   = {}
-        # Detail panel portraits (medium)
-        self._portraits_detail = {}
-        port_w  = int(cw * 0.78)
-        port_h  = int(ch * 0.62)
-        det_sz  = int(lay["right_w"] * 0.42)
+        right_x  = self._L + self._M
+        right_w  = sw - right_x
+        btn_w    = int(right_w * 0.72)
+        btn_h    = int(sh * 0.058)
+        self._connect_rect = pygame.Rect(
+            right_x + (right_w - btn_w) // 2, int(sh * 0.87), btn_w, btn_h
+        )
+
+        # Server card rects (precomputed for click detection)
+        pad_r    = int(right_w * 0.07)
+        srv_rx   = right_x + pad_r
+        srv_rw   = right_w - 2 * pad_r
+        hdr_approx = int(sh * 0.019) + int(sh * 0.018)
+        card_rh  = int(sh * 0.22)
+        card_rg  = int(sh * 0.014)
+        cards_y  = self._title_h + int(sh * 0.025) + hdr_approx
+        self._server_card_rects = [
+            pygame.Rect(srv_rx, cards_y + i * (card_rh + card_rg), srv_rw, card_rh)
+            for i in range(len(self._servers))
+        ]
+
+        port_sm = int(sh * 0.072)
+        port_lg = int(sh * 0.21)
+        self._portraits_sm = {}
+        self._portraits_lg = {}
         for card in _HERO_CARDS:
             path = HERO_ASSET_MAP.get(card["name"])
             if path and os.path.exists(path):
                 img = pygame.image.load(path).convert_alpha()
-                self._portraits_card[card["name"]]   = pygame.transform.smoothscale(img, (port_w, port_h))
-                self._portraits_detail[card["name"]] = pygame.transform.smoothscale(img, (det_sz, det_sz))
+                self._portraits_sm[card["name"]] = pygame.transform.smoothscale(img, (port_sm, port_sm))
+                self._portraits_lg[card["name"]] = pygame.transform.smoothscale(img, (port_lg, port_lg))
 
-        self._font_title      = pygame.font.SysFont("arial", 44, bold=True)
-        self._font_card_name  = pygame.font.SysFont("arial", 20, bold=True)
-        self._font_det_name   = pygame.font.SysFont("arial", 32, bold=True)
-        self._font_det_desc   = pygame.font.SysFont("arial", 14)
-        self._font_stat_lbl   = pygame.font.SysFont("arial", 15)
-        self._font_stat_val   = pygame.font.SysFont("arial", 15, bold=True)
-        self._font_ab_key     = pygame.font.SysFont("arial", 13, bold=True)
-        self._font_ab_name    = pygame.font.SysFont("arial", 14, bold=True)
-        self._font_ab_desc    = pygame.font.SysFont("arial", 13)
-        self._font_ab_hdr     = pygame.font.SysFont("arial", 14, bold=True)
-        self._font_btn        = pygame.font.SysFont("arial", 28, bold=True)
-        self._font_hint       = pygame.font.SysFont("arial", 15)
-        self._font_addr       = pygame.font.SysFont("arial", 17)
+        self._item_icons      = _build_item_icons(28)
+        self._sel_item        = None
+        self._item_card_rects = {}
+
+        self._f_title     = pygame.font.SysFont("arial", int(sh * 0.046), bold=True)
+        self._f_phdr      = pygame.font.SysFont("arial", int(sh * 0.019), bold=True)
+        self._f_row       = pygame.font.SysFont("arial", int(sh * 0.021), bold=True)
+        self._f_det_name  = pygame.font.SysFont("arial", int(sh * 0.030), bold=True)
+        self._f_det_desc  = pygame.font.SysFont("arial", int(sh * 0.015))
+        self._f_stat_lbl  = pygame.font.SysFont("arial", int(sh * 0.016))
+        self._f_stat_val  = pygame.font.SysFont("arial", int(sh * 0.016), bold=True)
+        self._f_ab_key    = pygame.font.SysFont("arial", int(sh * 0.014), bold=True)
+        self._f_ab_name   = pygame.font.SysFont("arial", int(sh * 0.015), bold=True)
+        self._f_ab_desc   = pygame.font.SysFont("arial", int(sh * 0.014))
+        self._f_ab_hdr    = pygame.font.SysFont("arial", int(sh * 0.015), bold=True)
+        self._f_btn       = pygame.font.SysFont("arial", int(sh * 0.026), bold=True)
+        self._f_srv       = pygame.font.SysFont("arial", int(sh * 0.017))
+        self._f_srv_sm    = pygame.font.SysFont("arial", int(sh * 0.014))
 
     def process_input(self, events):
-        mx, my = pygame.mouse.get_pos()   # raw screen coords → native-res rects
-        self._hovered = None
-        for i, rect in enumerate(self._card_rects_ui):
-            if rect.collidepoint(mx, my):
-                self._hovered = i
+        mx, my = pygame.mouse.get_pos()
+        self._hovered_row = None
+        for i, r in enumerate(self._hero_rows):
+            if r.collidepoint(mx, my):
+                self._hovered_row = i
 
         for event in events:
             if event.type == pygame.QUIT:
                 self.next_scene = None
-            if event.type == pygame.KEYDOWN:
-                if event.key == pygame.K_ESCAPE:
-                    if self._addr_focused:
-                        self._addr_focused = False
-                    else:
-                        self.next_scene = None
-                elif self._addr_focused:
-                    if event.key == pygame.K_BACKSPACE:
-                        self._server_addr = self._server_addr[:-1]
-                    elif event.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
-                        self._addr_focused = False
-                    elif event.unicode and event.unicode.isprintable():
-                        self._server_addr += event.unicode
+            if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
+                self.next_scene = None
             if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
                 ex, ey = event.pos
-                self._addr_focused = self._input_rect_ui.collidepoint(ex, ey)
-                for i, rect in enumerate(self._card_rects_ui):
-                    if rect.collidepoint(ex, ey):
-                        self.chosen_hero = _HERO_CARDS[i]["name"]
-                if self.chosen_hero and self._btn_rect_ui.collidepoint(ex, ey):
-                    self.next_scene = SceneConnecting(self.chosen_hero, self._server_addr)
+                for i, r in enumerate(self._hero_rows):
+                    if r.collidepoint(ex, ey):
+                        self._chosen = _HERO_CARDS[i]["name"]
+                for key, r in self._item_card_rects.items():
+                    if r.collidepoint(ex, ey):
+                        self._sel_item = key if self._sel_item != key else None
+                for i, r in enumerate(self._server_card_rects):
+                    if r.collidepoint(ex, ey):
+                        self._sel_server = i
+                if self._connect_rect.collidepoint(ex, ey) \
+                        and self._server_infos[self._sel_server].get("online"):
+                    srv = self._servers[self._sel_server]
+                    self.next_scene = SceneConnecting(srv["host"], srv["port"], self._chosen)
 
     def update(self, dt):
-        if self._addr_focused:
-            self._cursor_timer += dt
-            if self._cursor_timer >= 0.5:
-                self._cursor_timer = 0.0
-                self._cursor_vis = not self._cursor_vis
-        else:
-            self._cursor_timer = 0.0
-            self._cursor_vis   = True
+        self._ping_timer -= dt
+        if self._ping_timer <= 0:
+            self._ping_timer = self._PING_INTERVAL
+            for i in range(len(self._servers)):
+                asyncio.create_task(_do_ping_idx(self, i))
 
     def render(self, screen):
-        screen.fill((0, 0, 0))
+        screen.fill((20, 14, 4))
 
     def render_ui(self, ui_surf):
-        sw, sh   = _SCREEN_W, _SCREEN_H
-        left_w   = self._left_w
-        right_x  = left_w
-        right_w  = sw - right_x
-        right_cx = right_x + right_w // 2
+        sw, sh  = _SCREEN_W, _SCREEN_H
+        mx, my  = pygame.mouse.get_pos()
+        L       = self._L
+        M       = self._M
+        mid_x   = L
+        right_x = L + M
+        right_w = sw - right_x
+        title_h = self._title_h
 
-        ui_surf.blit(self._bg_ui, (0, 0))
-        ui_surf.blit(self._overlay_ui, (0, 0))
+        # ── Background + panel fills ───────────────────────────────────────
+        ui_surf.fill((20, 14, 4))
 
-        # Title — full width
-        title = self._font_title.render("SELECT YOUR HERO", True, (220, 200, 100))
-        ui_surf.blit(title, title.get_rect(centerx=sw // 2, top=int(sh * 0.05)))
+        # Title bar — slightly lighter warm strip
+        tb = pygame.Surface((sw, title_h), pygame.SRCALPHA)
+        tb.fill((32, 24, 8, 250))
+        ui_surf.blit(tb, (0, 0))
 
-        # Vertical divider
-        pygame.draw.line(ui_surf, (45, 55, 85), (left_w, int(sh * 0.13)), (left_w, int(sh * 0.96)), 1)
+        # Three panel backgrounds — left/right slightly warmer than centre
+        for bx, bw, col in (
+            (0,       L,       (28, 21, 8,  210)),
+            (L,       M,       (22, 16, 5,  210)),
+            (right_x, right_w, (28, 21, 8,  210)),
+        ):
+            ps = pygame.Surface((bw, sh - title_h), pygame.SRCALPHA)
+            ps.fill(col)
+            ui_surf.blit(ps, (bx, title_h))
 
-        mx, my = pygame.mouse.get_pos()
+        # Outer frame + dividers — all in warm amber/gold
+        pygame.draw.rect(ui_surf, (95, 72, 18), pygame.Rect(0, 0, sw, sh), 1)
+        pygame.draw.line(ui_surf, (95, 72, 18), (0,       title_h), (sw,      title_h), 1)
+        pygame.draw.line(ui_surf, (65, 50, 12), (L,       title_h), (L,       sh - 1),  1)
+        pygame.draw.line(ui_surf, (65, 50, 12), (right_x, title_h), (right_x, sh - 1),  1)
 
-        # ── Left 2/3: hero cards ─────────────────────────────────────────
-        for i, (card, rect) in enumerate(zip(_HERO_CARDS, self._card_rects_ui)):
-            is_selected = self.chosen_hero == card["name"]
-            is_hovered  = self._hovered == i
+        # ── Title ─────────────────────────────────────────────────────────
+        t_s = self._f_title.render("GLORY DAY", True, (240, 200, 55))
+        ui_surf.blit(t_s, t_s.get_rect(centerx=sw // 2, centery=title_h // 2))
 
-            surf = pygame.Surface((rect.w, rect.h), pygame.SRCALPHA)
-            if is_selected:
-                surf.fill((40, 70, 130, 220))
-            elif is_hovered:
-                surf.fill((50, 55, 80, 200))
+        # ── Left panel: hero list ──────────────────────────────────────────
+        hdr = self._f_phdr.render("HEROES", True, (185, 148, 45))
+        ui_surf.blit(hdr, hdr.get_rect(centerx=L // 2, top=title_h + int(sh * 0.016)))
+
+        for i, (card, row_r) in enumerate(zip(_HERO_CARDS, self._hero_rows)):
+            is_sel = self._chosen == card["name"]
+            is_hov = self._hovered_row == i
+            bg = pygame.Surface((row_r.w, row_r.h), pygame.SRCALPHA)
+            if is_sel:
+                bg.fill((105, 80, 18, 225))
+            elif is_hov:
+                bg.fill((58, 44, 14, 190))
             else:
-                surf.fill((22, 26, 44, 200))
-            ui_surf.blit(surf, rect.topleft)
-
-            border_col = (100, 160, 255) if is_selected else (70, 82, 115) if is_hovered else (40, 48, 74)
-            border_w   = 3 if is_selected else 1
-            pygame.draw.rect(ui_surf, border_col, rect, border_w, border_radius=8)
-
-            portrait = self._portraits_card.get(card["name"])
+                bg.fill((35, 26, 8,  165))
+            ui_surf.blit(bg, row_r.topleft)
+            brd = (220, 175, 38) if is_sel else (90, 70, 18) if is_hov else (58, 44, 12)
+            pygame.draw.rect(ui_surf, brd, row_r, 2 if is_sel else 1, border_radius=6)
+            portrait = self._portraits_sm.get(card["name"])
+            txt_x = row_r.x + 8
             if portrait:
-                px = rect.x + (rect.w - portrait.get_width()) // 2
-                ui_surf.blit(portrait, (px, rect.y + 10))
-                pb = rect.y + 10 + portrait.get_height()
+                py = row_r.y + (row_r.h - portrait.get_height()) // 2
+                ui_surf.blit(portrait, (txt_x, py))
+                txt_x += portrait.get_width() + 8
+            name_col = (240, 200, 55) if is_sel else (215, 195, 148)
+            n_s = self._f_row.render(card["name"].upper(), True, name_col)
+            ui_surf.blit(n_s, n_s.get_rect(midleft=(txt_x, row_r.centery)))
+
+        # ── Middle panel: hero detail ──────────────────────────────────────
+        pad   = int(M * 0.06)
+        det_x = mid_x + pad
+        det_w = M - 2 * pad
+        y     = title_h + int(sh * 0.025)
+
+        hdr = self._f_phdr.render("HERO DETAIL", True, (185, 148, 45))
+        ui_surf.blit(hdr, (det_x, y))
+        y += hdr.get_height() + int(sh * 0.015)
+
+        card = next(c for c in _HERO_CARDS if c["name"] == self._chosen)
+
+        portrait = self._portraits_lg.get(self._chosen)
+        if portrait:
+            px = mid_x + (M - portrait.get_width()) // 2
+            # Warm backdrop so sprites read against the dark bg
+            back = pygame.Surface((portrait.get_width() + 12, portrait.get_height() + 12), pygame.SRCALPHA)
+            back.fill((45, 34, 10, 160))
+            ui_surf.blit(back, (px - 6, y - 6))
+            ui_surf.blit(portrait, (px, y))
+            y += portrait.get_height() + int(sh * 0.012)
+
+        n_s = self._f_det_name.render(card["name"].upper(), True, (240, 200, 55))
+        ui_surf.blit(n_s, n_s.get_rect(centerx=mid_x + M // 2, top=y))
+        y += n_s.get_height() + 4
+
+        d_s = self._f_det_desc.render(card["desc"], True, (165, 148, 105))
+        ui_surf.blit(d_s, d_s.get_rect(centerx=mid_x + M // 2, top=y))
+        y += d_s.get_height() + int(sh * 0.012)
+
+        pygame.draw.line(ui_surf, (78, 58, 14), (det_x, y), (det_x + det_w, y))
+        y += int(sh * 0.01)
+
+        stat_items = list(card["stats"].items())
+        col_w = det_w // 2
+        for idx, (lbl, val) in enumerate(stat_items):
+            col_i = idx % 2
+            row_i = idx // 2
+            sx = det_x + col_i * col_w
+            sy = y + row_i * int(sh * 0.026)
+            l_s = self._f_stat_lbl.render(f"{lbl}:", True, (148, 128, 72))
+            v_s = self._f_stat_val.render(str(val), True, (228, 212, 158))
+            ui_surf.blit(l_s, (sx, sy))
+            ui_surf.blit(v_s, (sx + l_s.get_width() + 4, sy))
+        y += ((len(stat_items) + 1) // 2) * int(sh * 0.026) + int(sh * 0.012)
+
+        pygame.draw.line(ui_surf, (78, 58, 14), (det_x, y), (det_x + det_w, y))
+        y += int(sh * 0.01)
+
+        ab_hdr = self._f_ab_hdr.render("ABILITIES", True, (185, 148, 45))
+        ui_surf.blit(ab_hdr, ab_hdr.get_rect(centerx=mid_x + M // 2, top=y))
+        y += ab_hdr.get_height() + int(sh * 0.008)
+
+        for key, name, desc in card["abilities"]:
+            key_sz = int(sh * 0.024)
+            key_r  = pygame.Rect(det_x, y + 2, key_sz, key_sz)
+            pygame.draw.rect(ui_surf, (52, 38, 10), key_r, border_radius=4)
+            pygame.draw.rect(ui_surf, (118, 90, 22), key_r, 1, border_radius=4)
+            k_s = self._f_ab_key.render(key, True, (235, 200, 80))
+            ui_surf.blit(k_s, k_s.get_rect(center=key_r.center))
+            n_s = self._f_ab_name.render(name, True, (215, 185, 95))
+            ui_surf.blit(n_s, (det_x + key_sz + 6, y + 2))
+            d_s = self._f_ab_desc.render(desc, True, (148, 132, 88))
+            ui_surf.blit(d_s, (det_x + key_sz + 6, y + 2 + n_s.get_height() + 2))
+            y += int(sh * 0.044)
+
+        # ── Items section ──────────────────────────────────────────────────
+        pygame.draw.line(ui_surf, (78, 58, 14), (det_x, y), (det_x + det_w, y))
+        y += int(sh * 0.010)
+
+        itm_hdr = self._f_ab_hdr.render("ITEMS", True, (185, 148, 45))
+        ui_surf.blit(itm_hdr, itm_hdr.get_rect(centerx=mid_x + M // 2, top=y))
+        y += itm_hdr.get_height() + int(sh * 0.010)
+
+        icon_sz  = 28
+        crd_gap  = int(det_w * 0.025)
+        icrd_w   = (det_w - 2 * crd_gap) // 3
+        icrd_h   = icon_sz + int(sh * 0.016)
+        row_gap  = int(sh * 0.007)
+
+        for idx, ikey in enumerate(ITEM_KEYS):
+            col    = idx % 3
+            row    = idx // 3
+            icrd_x = det_x + col * (icrd_w + crd_gap)
+            icrd_y = y + row * (icrd_h + row_gap)
+            icrd_r = pygame.Rect(icrd_x, icrd_y, icrd_w, icrd_h)
+            self._item_card_rects[ikey] = icrd_r
+
+            is_itm_sel = self._sel_item == ikey
+            is_itm_hov = icrd_r.collidepoint(mx, my)
+
+            ibg = pygame.Surface((icrd_w, icrd_h), pygame.SRCALPHA)
+            if is_itm_sel:
+                ibg.fill((100, 76, 18, 225))
+            elif is_itm_hov:
+                ibg.fill((56, 42, 12, 190))
             else:
-                pb = rect.y + int(rect.h * 0.62)
+                ibg.fill((36, 27, 8,  165))
+            ui_surf.blit(ibg, icrd_r.topleft)
+            ibrd = (220, 175, 38) if is_itm_sel else (95, 72, 18) if is_itm_hov else (65, 50, 14)
+            pygame.draw.rect(ui_surf, ibrd, icrd_r, 2 if is_itm_sel else 1, border_radius=4)
 
-            name_s = self._font_card_name.render(card["name"].upper(), True, (230, 230, 240))
-            ui_surf.blit(name_s, name_s.get_rect(centerx=rect.centerx, top=pb + 10))
+            icon = self._item_icons.get(ikey)
+            ix   = icrd_x + 5
+            iy   = icrd_y + (icrd_h - icon_sz) // 2
+            if icon:
+                ui_surf.blit(icon, (ix, iy))
+            tx    = ix + icon_sz + 5
+            nc    = (240, 200, 55) if is_itm_sel else (215, 192, 138)
+            nm_s  = self._f_srv_sm.render(ikey, True, nc)
+            cst_s = self._f_srv_sm.render(f"{ITEMS[ikey]['cost']}g", True, (145, 125, 68))
+            mid_y = icrd_y + icrd_h // 2
+            ui_surf.blit(nm_s,  (tx, mid_y - nm_s.get_height() - 1))
+            ui_surf.blit(cst_s, (tx, mid_y + 1))
 
-        # ── Right 1/3: detail panel ──────────────────────────────────────
-        panel_pad = int(right_w * 0.05)
-        panel_x   = right_x + panel_pad
-        panel_w   = right_w - 2 * panel_pad
-        panel_y   = int(sh * 0.13)
-        panel_h   = int(sh * 0.72)
+        rows_n = (len(ITEM_KEYS) + 2) // 3
+        y += rows_n * (icrd_h + row_gap) + int(sh * 0.010)
 
-        panel_bg = pygame.Surface((panel_w, panel_h), pygame.SRCALPHA)
-        panel_bg.fill((12, 15, 26, 210))
-        ui_surf.blit(panel_bg, (panel_x, panel_y))
-        pygame.draw.rect(ui_surf, (45, 58, 90), (panel_x, panel_y, panel_w, panel_h), 1, border_radius=6)
+        # Selected item detail
+        if self._sel_item:
+            item = ITEMS[self._sel_item]
+            pygame.draw.line(ui_surf, (78, 58, 14), (det_x, y), (det_x + det_w, y))
+            y += int(sh * 0.008)
+            sel_nm  = self._f_ab_name.render(self._sel_item, True, (240, 200, 55))
+            sel_cst = self._f_srv_sm.render(f"{item['cost']}g", True, (165, 148, 88))
+            ui_surf.blit(sel_nm,  (det_x, y))
+            ui_surf.blit(sel_cst, (det_x + det_w - sel_cst.get_width(), y))
+            y += sel_nm.get_height() + int(sh * 0.005)
+            dsc_s = self._f_ab_desc.render(item["desc"], True, (148, 132, 88))
+            ui_surf.blit(dsc_s, (det_x, y))
 
-        if self.chosen_hero:
-            card    = next(c for c in _HERO_CARDS if c["name"] == self.chosen_hero)
-            y       = panel_y + 14
+        # ── Right panel: servers ───────────────────────────────────────────
+        pad_r = int(right_w * 0.07)
+        srv_x = right_x + pad_r
+        yr    = title_h + int(sh * 0.025)
 
-            portrait = self._portraits_detail.get(self.chosen_hero)
-            if portrait:
-                px = panel_x + (panel_w - portrait.get_width()) // 2
-                ui_surf.blit(portrait, (px, y))
-                y += portrait.get_height() + 10
+        hdr = self._f_phdr.render("SERVERS", True, (185, 148, 45))
+        ui_surf.blit(hdr, (srv_x, yr))
 
-            name_s = self._font_det_name.render(card["name"].upper(), True, (220, 200, 100))
-            ui_surf.blit(name_s, name_s.get_rect(centerx=panel_x + panel_w // 2, top=y))
-            y += name_s.get_height() + 5
+        for i, (srv, card_r) in enumerate(zip(self._servers, self._server_card_rects)):
+            info   = self._server_infos[i]
+            online = info.get("online")
+            is_sel = self._sel_server == i
+            is_hov = card_r.collidepoint(mx, my)
 
-            desc_s = self._font_det_desc.render(card["desc"], True, (150, 158, 185))
-            ui_surf.blit(desc_s, desc_s.get_rect(centerx=panel_x + panel_w // 2, top=y))
-            y += desc_s.get_height() + 10
+            if is_sel:
+                bg_col  = (80, 60, 14, 225)
+                brd_col = (220, 175, 38)
+            elif is_hov:
+                bg_col  = (50, 38, 11, 200)
+                brd_col = (100, 76, 20)
+            else:
+                bg_col  = (32, 24, 7,  200)
+                brd_col = (68, 52, 14)
+            card_surf = pygame.Surface((card_r.w, card_r.h), pygame.SRCALPHA)
+            card_surf.fill(bg_col)
+            ui_surf.blit(card_surf, card_r.topleft)
+            pygame.draw.rect(ui_surf, brd_col, card_r, 2 if is_sel else 1, border_radius=6)
 
-            pygame.draw.line(ui_surf, (40, 52, 82), (panel_x + 10, y), (panel_x + panel_w - 10, y))
-            y += 10
+            inner_x = card_r.x + int(right_w * 0.07)
+            dot_cy  = card_r.y + int(sh * 0.024)
 
-            # Stats (2-column grid)
-            stat_items = list(card["stats"].items())
-            col_w = panel_w // 2
-            for idx, (lbl, val) in enumerate(stat_items):
-                col = idx % 2
-                row = idx // 2
-                sx  = panel_x + col * col_w + 10
-                sy  = y + row * 22
-                l_s = self._font_stat_lbl.render(f"{lbl}:", True, (120, 130, 165))
-                v_s = self._font_stat_val.render(str(val), True, (210, 215, 230))
-                ui_surf.blit(l_s, (sx, sy))
-                ui_surf.blit(v_s, (sx + l_s.get_width() + 5, sy))
-            y += ((len(stat_items) + 1) // 2) * 22 + 10
+            if online is None:
+                dot_col = (100, 88, 48)
+            elif online:
+                phase   = info.get("game_phase", "waiting")
+                dot_col = (55, 210, 80) if phase == "waiting" else (215, 175, 40)
+            else:
+                dot_col = (205, 55, 55)
+            pygame.draw.circle(ui_surf, dot_col, (inner_x, dot_cy + 7), 6)
 
-            pygame.draw.line(ui_surf, (40, 52, 82), (panel_x + 10, y), (panel_x + panel_w - 10, y))
-            y += 8
+            name_col = (240, 200, 55) if is_sel else (210, 192, 142)
+            srv_n = self._f_srv.render(srv["name"], True, name_col)
+            ui_surf.blit(srv_n, (inner_x + 16, dot_cy))
+            cy = dot_cy + srv_n.get_height() + int(sh * 0.012)
 
-            hdr = self._font_ab_hdr.render("ABILITIES", True, (150, 135, 70))
-            ui_surf.blit(hdr, hdr.get_rect(centerx=panel_x + panel_w // 2, top=y))
-            y += hdr.get_height() + 8
+            addr_s = self._f_srv_sm.render(srv["addr"], True, (118, 100, 55))
+            ui_surf.blit(addr_s, (inner_x, cy))
+            cy += addr_s.get_height() + int(sh * 0.010)
 
-            for key, name, desc in card["abilities"]:
-                key_r = pygame.Rect(panel_x + 8, y + 2, 22, 22)
-                pygame.draw.rect(ui_surf, (35, 46, 74), key_r, border_radius=4)
-                pygame.draw.rect(ui_surf, (65, 85, 125), key_r, 1, border_radius=4)
-                k_s = self._font_ab_key.render(key, True, (190, 205, 235))
-                ui_surf.blit(k_s, k_s.get_rect(center=key_r.center))
+            if online is None:
+                st_txt = "Checking..."
+                st_col = (118, 105, 62)
+            elif online:
+                pc    = info.get("player_count", 0)
+                max_p = info.get("max_players", 6)
+                phase = info.get("game_phase", "waiting")
+                pc_s  = self._f_srv.render(f"{pc} / {max_p} players", True, (192, 172, 118))
+                ui_surf.blit(pc_s, (inner_x, cy))
+                cy   += pc_s.get_height() + int(sh * 0.005)
+                st_txt = phase.upper()
+                st_col = (80, 195, 90) if phase == "waiting" else (205, 168, 45)
+            else:
+                st_txt = "OFFLINE"
+                st_col = (200, 68, 68)
+            st_s = self._f_srv.render(st_txt, True, st_col)
+            ui_surf.blit(st_s, (inner_x, cy))
 
-                n_s = self._font_ab_name.render(name, True, (195, 180, 115))
-                ui_surf.blit(n_s, (panel_x + 36, y + 2))
-                d_s = self._font_ab_desc.render(desc, True, (120, 128, 155))
-                ui_surf.blit(d_s, (panel_x + 36, y + 18))
-                y += 40
+        # CONNECT button
+        sel_online  = self._server_infos[self._sel_server].get("online")
+        can_connect = sel_online is True
+        btn_r       = self._connect_rect
+        is_hov_btn  = btn_r.collidepoint(mx, my)
+        if can_connect:
+            btn_bg  = (175, 132, 22) if is_hov_btn else (148, 110, 16)
+            btn_brd = (235, 192, 48)
+            btn_tc  = (255, 245, 185)
         else:
-            hint = self._font_hint.render("Select a hero to preview", True, (90, 96, 130))
-            ui_surf.blit(hint, hint.get_rect(centerx=panel_x + panel_w // 2, centery=panel_y + panel_h // 2))
-
-        # ── LOCK IN button ────────────────────────────────────────────────
-        if self.chosen_hero:
-            btn_col = (40, 165, 75) if self._btn_rect_ui.collidepoint(mx, my) else (28, 130, 55)
-            pygame.draw.rect(ui_surf, btn_col, self._btn_rect_ui, border_radius=10)
-            pygame.draw.rect(ui_surf, (60, 220, 100), self._btn_rect_ui, 2, border_radius=10)
-            btn_text = self._font_btn.render("LOCK IN", True, (255, 255, 255))
-            ui_surf.blit(btn_text, btn_text.get_rect(center=self._btn_rect_ui.center))
-
-        # ── Server address input ──────────────────────────────────────────
-        lbl = self._font_addr.render("Server:", True, (140, 148, 175))
-        lbl_rect = lbl.get_rect(right=self._input_rect_ui.left - 8, centery=self._input_rect_ui.centery)
-        ui_surf.blit(lbl, lbl_rect)
-
-        box_col = (25, 28, 46) if not self._addr_focused else (18, 22, 40)
-        rim_col = (100, 160, 255) if self._addr_focused else (52, 62, 92)
-        pygame.draw.rect(ui_surf, box_col, self._input_rect_ui, border_radius=6)
-        pygame.draw.rect(ui_surf, rim_col, self._input_rect_ui, 2, border_radius=6)
-
-        display = self._server_addr
-        if self._addr_focused and self._cursor_vis:
-            display += "|"
-        addr_surf = self._font_addr.render(display, True, (210, 218, 238))
-        ui_surf.blit(addr_surf, addr_surf.get_rect(
-            midleft=(self._input_rect_ui.left + 8, self._input_rect_ui.centery)
-        ))
+            btn_bg  = (30, 22, 6)
+            btn_brd = (65, 50, 14)
+            btn_tc  = (88, 74, 32)
+        pygame.draw.rect(ui_surf, btn_bg,  btn_r, border_radius=8)
+        pygame.draw.rect(ui_surf, btn_brd, btn_r, 2, border_radius=8)
+        btn_s = self._f_btn.render("CONNECT", True, btn_tc)
+        ui_surf.blit(btn_s, btn_s.get_rect(center=btn_r.center))
 
 
 #-------------------------------------------------------------------------------------------------------------------Connecting
 class SceneConnecting:
-    def __init__(self, hero_name, server_addr=None):
+    def __init__(self, host, port, hero_name):
         self.next_scene = self
         self._hero_name = hero_name
-        self._font = pygame.font.SysFont("arial", 22)
-        raw = (server_addr or f"{CLIENT_DEFAULT_HOST}:{SERVER_PORT}").strip()
-        if ":" in raw:
-            h, _, p = raw.rpartition(":")
-            try:
-                self._host = h.strip() or CLIENT_DEFAULT_HOST
-                self._port = int(p.strip())
-            except ValueError:
-                self._host, self._port = CLIENT_DEFAULT_HOST, SERVER_PORT
-        else:
-            self._host = raw or CLIENT_DEFAULT_HOST
-            self._port = SERVER_PORT
-        self._error = None
+        self._host      = host
+        self._port      = port
+        self._font      = pygame.font.SysFont("arial", 22)
+        self._error     = None
         asyncio.create_task(self._connect())
 
     async def _connect(self):
@@ -417,7 +495,11 @@ class SceneConnecting:
             asyncio.create_task(client.receive_loop())
             ok = await client.wait_for_welcome()
             if not ok:
-                self._error = f"No response from {self._host}:{self._port}\nCheck server is running and address is correct."
+                err = client.latest_snapshot
+                if err.get("type") == "error":
+                    self._error = err.get("msg", "Connection rejected by server.")
+                else:
+                    self._error = f"No response from {self._host}:{self._port}\nCheck server is running and address is correct."
                 return
             self.next_scene = SceneTest(client)
         except Exception as e:
@@ -428,7 +510,7 @@ class SceneConnecting:
             if event.type == pygame.QUIT:
                 self.next_scene = None
             if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
-                self.next_scene = SceneHeroSelect()
+                self.next_scene = SceneMenu()
 
     def update(self, dt): pass
 
@@ -508,6 +590,12 @@ class SceneTest(SceneBase):
 
         # Shop
         self._shop_open = False
+        self._shop_sel  = None
+
+        # End-of-game auto-return timer
+        self._end_timer   = None
+        # Quit confirmation overlay
+        self._quit_confirm = False
 
         # Clamped placement cursor (world pos), set each render frame, read in process_input
         self._clamped_placement_pos = None
@@ -545,6 +633,7 @@ class SceneTest(SceneBase):
         self.effects              = EffectsSystem(self._font_floater)
         self._last_proc_snap      = 0.0
         self._local_attack_target = None   # (target_type, target_id) — drives indicator ring
+        self._hovered_target      = None   # (target_type, target_id) — enemy under cursor
         self._vfx_time            = 0.0    # monotonic clock for pulsing animations
 
     def _load_asset(self, filename, size=None):
@@ -579,18 +668,27 @@ class SceneTest(SceneBase):
             if event.type == pygame.MOUSEBUTTONDOWN:
                 sx, sy = event.pos
                 if event.button == 3:
-                    # Right-click on an inventory slot sells the item
-                    _inv_data = self.client.latest_snapshot.get("players", {}).get(
-                        self.client.my_player_id, {}).get("inventory", [])
-                    _sold = False
-                    for _i, _r in enumerate(self.hud.geometry["inventory_rects"]):
-                        if _r.collidepoint(sx, sy) and _i < len(_inv_data) and _inv_data[_i]:
-                            asyncio.create_task(self.client.send_sell_item(_i))
-                            _sold = True
-                            break
-                    if not _sold:
-                        self._placement_mode     = None
-                        self._entity_target_mode = None
+                    # Right-click on shop icon → buy instantly
+                    _shop_bought = False
+                    if self._shop_open:
+                        for _ikey, _ir in self.hud.shop_icon_rects:
+                            if _ir.collidepoint(sx, sy):
+                                asyncio.create_task(self.client.send_buy_item(_ikey))
+                                _shop_bought = True
+                                break
+                    if not _shop_bought:
+                        # Right-click on an inventory slot sells the item
+                        _inv_data = self.client.latest_snapshot.get("players", {}).get(
+                            self.client.my_player_id, {}).get("inventory", [])
+                        _sold = False
+                        for _i, _r in enumerate(self.hud.geometry["inventory_rects"]):
+                            if _r.collidepoint(sx, sy) and _i < len(_inv_data) and _inv_data[_i]:
+                                asyncio.create_task(self.client.send_sell_item(_i))
+                                _sold = True
+                                break
+                        if not _sold:
+                            self._placement_mode     = None
+                            self._entity_target_mode = None
                 elif event.button == 1:
                     # Lobby buttons take priority over all world clicks
                     _snap_ph = self.client.latest_snapshot.get("game_phase", "live")
@@ -640,18 +738,46 @@ class SceneTest(SceneBase):
                         self._pending_ability = self._placement_mode
                         self._ability_target  = (wx, wy)
                         self._placement_mode  = None
-                    elif self._shop_open and any(r.collidepoint(sx, sy) for r in self.hud.shop_btn_rects):
-                        for idx, r in enumerate(self.hud.shop_btn_rects):
-                            if r.collidepoint(sx, sy):
-                                asyncio.create_task(self.client.send_buy_item(ITEM_KEYS[idx]))
+                    elif self._shop_open:
+                        # Check icon grid selection
+                        _icon_hit = False
+                        for _ikey, _ir in self.hud.shop_icon_rects:
+                            if _ir.collidepoint(sx, sy):
+                                self._shop_sel = _ikey
+                                _icon_hit = True
                                 break
+                        # Check BUY button
+                        if not _icon_hit and self.hud.shop_buy_rect and self.hud.shop_buy_rect.collidepoint(sx, sy):
+                            if self._shop_sel:
+                                asyncio.create_task(self.client.send_buy_item(self._shop_sel))
+                            _icon_hit = True
+                        # Click outside panel closes shop
+                        if not _icon_hit:
+                            self._shop_open = False
+                            self._shop_sel  = None
                     elif self.hud.geometry["shop_rect"].collidepoint(sx, sy):
                         self._shop_open = not self._shop_open
+                        if not self._shop_open:
+                            self._shop_sel = None
                     elif mini_rect_screen.collidepoint(sx, sy):
                         self._handle_minimap_click(sx - 8, sy - (_SCREEN_H - MINI_H - 8))
                     else:
                         self._handle_click((sx / _SCALE_X, sy / _SCALE_Y))
             if event.type == pygame.KEYDOWN:
+                # Quit-confirm overlay intercepts all keys when active
+                if self._quit_confirm:
+                    if event.key == pygame.K_y:
+                        self.next_scene = None
+                    elif event.key in (pygame.K_n, pygame.K_ESCAPE):
+                        self._quit_confirm = False
+                    continue
+
+                # Return-to-menu key on winner screen
+                _snap_check = self.client.latest_snapshot
+                if _snap_check.get("winner") is not None and event.key == pygame.K_m:
+                    self.next_scene = SceneMenu()
+                    continue
+
                 match event.key:
                     case pygame.K_q:      self._handle_ability_key(0)
                     case pygame.K_e:      self._handle_ability_key(1)
@@ -661,11 +787,14 @@ class SceneTest(SceneBase):
                     case pygame.K_h:      self._show_debug = not self._show_debug
                     case pygame.K_SPACE:  self._cam_locked = True
                     case pygame.K_ESCAPE:
-                        if self._placement_mode is not None or self._entity_target_mode is not None:
+                        if self._shop_open:
+                            self._shop_open = False
+                            self._shop_sel  = None
+                        elif self._placement_mode is not None or self._entity_target_mode is not None:
                             self._placement_mode     = None
                             self._entity_target_mode = None
                         else:
-                            self.next_scene = None
+                            self._quit_confirm = True
 
     def _handle_minimap_click(self, rel_x, rel_y):
         world_x = rel_x / MINI_SX
@@ -729,7 +858,7 @@ class SceneTest(SceneBase):
                 if p.get("is_invisible") and not p.get("revealed_timer", 0) > 0:
                     continue
                 dx, dy = wx - pos[0], wy - pos[1]
-                if dx*dx + dy*dy <= 64:
+                if dx*dx + dy*dy <= 400:
                     self._set_attack_target("player", pid)
                     return
 
@@ -757,6 +886,22 @@ class SceneTest(SceneBase):
 
     def update(self, dt):
         super().update(dt)
+
+        # Return to menu when server closes the connection
+        if not self.client.is_connected:
+            self.next_scene = SceneMenu()
+            return
+
+        # Auto-return to menu 8 s after game ends
+        snap_early = self.client.latest_snapshot
+        if snap_early.get("winner") is not None:
+            if self._end_timer is None:
+                self._end_timer = 8.0
+            self._end_timer -= dt
+            if self._end_timer <= 0:
+                self.next_scene = SceneMenu()
+                return
+
         self.input_send_timer += dt
         if self.input_send_timer >= CLIENT_INPUT_INTERVAL:
             self.input_send_timer = 0.0
@@ -859,6 +1004,31 @@ class SceneTest(SceneBase):
             ttype, tid = self._local_attack_target
             if target_is_gone(ttype, tid, snap):
                 self._local_attack_target = None
+
+        # Hover detection — enemy under mouse cursor
+        mx_raw, my_raw = pygame.mouse.get_pos()
+        mx_vp = mx_raw / _SCALE_X
+        my_vp = my_raw / _SCALE_Y
+        wx_h  = mx_vp + self.cam_x
+        wy_h  = my_vp + self.cam_y
+        self._hovered_target = None
+        my_bush = snap.get("players", {}).get(self.client.my_player_id, {}).get("bush_idx", -1)
+        for pid, p_data in snap.get("players", {}).items():
+            if pid == self.client.my_player_id:
+                continue
+            if p_data.get("is_dead"):
+                continue
+            if p_data.get("is_invisible") and not p_data.get("revealed_timer", 0) > 0:
+                continue
+            enemy_bush = p_data.get("bush_idx", -1)
+            if enemy_bush >= 0 and enemy_bush != my_bush:
+                continue
+            pos = self.client.get_interpolated_pos("players", pid)
+            if pos and self._is_visible(pos[0], pos[1]):
+                dx, dy = wx_h - pos[0], wy_h - pos[1]
+                if dx*dx + dy*dy <= 400:
+                    self._hovered_target = ("player", pid)
+                    break
 
         self.effects.tick(dt)
         self._vfx_time += dt
@@ -1042,6 +1212,20 @@ class SceneTest(SceneBase):
                                     pygame.Rect(sx - r, sy - r, r * 2, r * 2),
                                     end_a - arc_angle, end_a, 3)
 
+            #Hook channel — pulsing orange ring that fills as channel completes
+            hook_ab = next((ab for ab in abilities
+                            if ab and ab.get("name") == "Hook" and ab.get("is_channeling")), None)
+            if hook_ab:
+                elapsed   = hook_ab["channel_time"] - hook_ab["channel_timer"]
+                progress  = elapsed / max(hook_ab["channel_time"], 0.001)
+                arc_angle = 2 * math.pi * progress
+                r = 20
+                pygame.draw.circle(screen, (80, 40, 10), (sx, sy), r, 1)
+                if arc_angle > 0.05:
+                    pygame.draw.arc(screen, (255, 160, 40),
+                                    pygame.Rect(sx - r, sy - r, r * 2, r * 2),
+                                    math.pi / 2, math.pi / 2 + arc_angle, 3)
+
             #Hero sprite
             hero = p_data.get("hero", "Player")
             img  = self._get_hero_image(hero)
@@ -1196,6 +1380,12 @@ class SceneTest(SceneBase):
                 team_col = TEAM_COLOURS.get(bp.get("owner_team"), (200, 200, 100))
                 pygame.draw.rect(screen, team_col, (bx - 10, by - 2, 20, 4))
 
+        #Hook projectiles — orange circle with short chain trail
+        for hp in snap.get("hook_projectiles", {}).values():
+            hx, hy = self._w2s(hp["x"], hp["y"])
+            pygame.draw.circle(screen, (210, 110, 20), (hx, hy), 5)
+            pygame.draw.circle(screen, (255, 190, 60), (hx, hy), 5, 2)
+
         # Turret placement mode overlay
         if self._placement_mode is not None:
             snap      = self.client.latest_snapshot
@@ -1301,6 +1491,14 @@ class SceneTest(SceneBase):
                 sx, sy = self._w2s(pos[0], pos[1])
                 pygame.draw.circle(screen, (200, 200, 80), (sx, sy), int(rng), 1)
 
+        # Hover ring — white circle on enemy under cursor
+        if self._hovered_target and self._hovered_target != self._local_attack_target:
+            _ht, _hid = self._hovered_target
+            _hpos = self.client.get_interpolated_pos("players", _hid) if _ht == "player" else None
+            if _hpos:
+                _hsx, _hsy = self._w2s(_hpos[0], _hpos[1])
+                pygame.draw.circle(screen, (220, 220, 220), (_hsx, _hsy), 18, 1)
+
         # Attack target indicator — pulsing ring on current auto-attack target
         if self._local_attack_target:
             ttype, tid = self._local_attack_target
@@ -1350,6 +1548,9 @@ class SceneTest(SceneBase):
             cam_locked=self._cam_locked,
             placement_mode=self._placement_mode,
             is_visible_fn=self._is_visible,
+            shop_sel=self._shop_sel,
+            end_countdown=self._end_timer,
+            quit_confirm=self._quit_confirm,
         )
 
     def _draw_capture_point(self, screen, b):
