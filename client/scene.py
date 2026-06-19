@@ -412,6 +412,7 @@ class SceneConnecting:
         client = NetworkClient(self._host, self._port, SNAPSHOT_INTERVAL)
         await client.connect()
         asyncio.create_task(client.receive_loop())
+        await client.wait_for_welcome()
         await client.send_hero_select(self._hero_name)
         self.next_scene = SceneTest(client)
 

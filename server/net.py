@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import socket
 
 from server.game_state import GameState
 from shared.protocol import make_snapshot
@@ -27,6 +28,9 @@ class GameServer:
         )
 
     async def handle_client(self, reader, writer):
+        sock = writer.get_extra_info('socket')
+        if sock:
+            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
         player_id = self.next_player_id
         self.next_player_id += 1
         team = 1 if player_id % 2 == 0 else 2
@@ -99,7 +103,6 @@ class GameServer:
             for writer in list(self.writers.values()):
                 try:
                     writer.write(data)
-                    await writer.drain()
                 except Exception:
                     pass
 

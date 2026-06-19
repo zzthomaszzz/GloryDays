@@ -1,5 +1,6 @@
 import asyncio
 import json
+import socket
 import time
 from shared.protocol import make_input_message, make_hero_select_message
 
@@ -22,6 +23,17 @@ class NetworkClient:
 
     async def connect(self):
         self.reader, self.writer = await asyncio.open_connection(self.host, self.port)
+        sock = self.writer.get_extra_info('socket')
+        if sock:
+            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+
+    async def wait_for_welcome(self, timeout=10.0):
+        deadline = time.time() + timeout
+        while self.my_player_id is None:
+            if time.time() > deadline:
+                return False
+            await asyncio.sleep(0.05)
+        return True
 
     async def receive_loop(self):
         while True:
@@ -33,7 +45,11 @@ class NetworkClient:
             if not line:
                 break
 
-            msg = json.loads(line.decode())
+            try:
+                msg = json.loads(line.decode())
+            except Exception:
+                continue
+
             if msg.get("type") == "welcome":
                 self.my_player_id = str(msg["player_id"])
                 self.my_team = msg["team"]
