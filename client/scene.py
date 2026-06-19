@@ -40,12 +40,10 @@ _EDGE_ZONE  = 15
 _EDGE_SPEED = 220
 
 HERO_ASSET_MAP = {
-    "Soldier":  os.path.join(_ROOT, "asset",  "soldier.png"),
-    "Mage":     os.path.join(_ROOT, "asset",  "mage.png"),
-    "Hunter":   os.path.join(_ROOT, "asset",  "hunter.png"),
-    "Vanguard": os.path.join(_ROOT, "assets", "vanguard.png"),
-    "Warden":   os.path.join(_ROOT, "assets", "warden.png"),
-    "Player":   os.path.join(_ROOT, "asset",  "default_player.png"),
+    "Soldier": os.path.join(_ROOT, "asset", "soldier.png"),
+    "Mage":    os.path.join(_ROOT, "asset", "mage.png"),
+    "Hunter":  os.path.join(_ROOT, "asset", "hunter.png"),
+    "Player":  os.path.join(_ROOT, "asset", "default_player.png"),
 }
 
 _HERO_CARDS = [
@@ -77,26 +75,6 @@ _HERO_CARDS = [
             ("Q", "Charge",      "Dash to an enemy, stunning them"),
             ("E", "Ground Slam", "AOE slam dealing 50 damage nearby"),
             ("R", "Fortify",     "Gain damage reduction for 5 seconds"),
-        ],
-    },
-    {
-        "name":  "Vanguard",
-        "desc":  "Fast skirmisher who dashes in and spins through enemies.",
-        "stats": {"HP": 470, "Damage": 68, "Range": 55, "Speed": 128, "Armor": 20},
-        "abilities": [
-            ("Q", "Blitz",      "Dash to an enemy dealing 35 bonus damage"),
-            ("E", "Whirlwind",  "Spin dealing 70 damage to all nearby"),
-            ("R", "Adrenaline", "+0.6 attack speed for 4 seconds"),
-        ],
-    },
-    {
-        "name":  "Warden",
-        "desc":  "Immovable tank who locks down enemies with CC.",
-        "stats": {"HP": 640, "Damage": 42, "Range": 52, "Speed": 88, "Armor": 48},
-        "abilities": [
-            ("Q", "Shield Bash", "AOE bash dealing 30 dmg + 50% slow for 2s"),
-            ("E", "Iron Wall",   "+50 armor and +40 MR for 3.5 seconds"),
-            ("R", "Warcry",      "Stun all nearby enemies for 1.2 seconds"),
         ],
     },
 ]
