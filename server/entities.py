@@ -1,5 +1,5 @@
-# Player class, HERO_ABILITIES, HERO_REGISTRY, and misc server-side entities
-# (Trap, BurningArea, PlayerTurret, Banner).
+# Player class, HERO_ABILITIES, HERO_REGISTRY, and misc server-side placed effects
+# (Trap, BurningArea — no HP, trigger/AoE based).
 # Stats and display data live in shared/heroes.py; only ability class references
 # belong here since those can't be in a shared module.
 from shared.heroes import HERO_STATS
@@ -25,7 +25,7 @@ HERO_ABILITIES = {
 
 HERO_REGISTRY = set(HERO_STATS)
 
-# Tunable numbers for spawned entities. Each class reads its own sub-dict.
+# Tunable numbers for spawned placed effects. Each class reads its own sub-dict.
 ENTITY_STATS = {
     'Trap': dict(
         root_dur=2.0, bleed_dps=30, bleed_dur=2.0,
@@ -33,14 +33,6 @@ ENTITY_STATS = {
     ),
     'BurningArea': dict(
         size=64, duration=4.0, tick_damage=20, tick_interval=0.5,
-    ),
-    'PlayerTurret': dict(
-        hp=200, armor=5, atk_range=100, atk_dmg=40,
-        atk_speed=0.8, vision=100, size=20, proj_speed=200,
-    ),
-    'Banner': dict(
-        hp=1, armor=0, vision=130, size=20,
-        duration=10.0, heal_radius=100, heal_pct_sec=0.02,
     ),
 }
 
@@ -103,12 +95,18 @@ class Player(EntityBase):
         #Abilities
         self.abilities = [A() for A in HERO_ABILITIES.get(hero_name, [])]
 
+        #Pull state (Hook)
+        self.pull_vx    = 0.0
+        self.pull_vy    = 0.0
+        self.pull_timer = 0.0
+
         #Status
         self.attack_target       = None
         self.is_dead             = False
         self.respawn_timer       = 0.0
-        self.is_attacking        = False
+        self.is_attacking        = False      # True during pre-fire melee windup (0.25 s commit)
         self.attack_windup_timer = 0.0
+        self._pending_damage     = 0          # melee only: damage locked in at windup commit
         self.stun_timer          = 0.0
         self.slow_timer          = 0.0
         self.slow_factor         = 1.0
@@ -123,16 +121,22 @@ class Player(EntityBase):
         self.bush_idx             = -1
 
     def reset_on_spawn(self, x, y):
-        self.x             = x
-        self.y             = y
-        self.hp            = self.max_hp
-        self.mana          = self.max_mana
-        self.dx            = 0
-        self.dy            = 0
-        self.attack_target = None
-        self.is_attacking  = False
-        self.is_dead       = False
-        self.bush_idx      = -1
+        self.x                   = x
+        self.y                   = y
+        self.hp                  = self.max_hp
+        self.mana                = self.max_mana
+        self.dx                  = 0
+        self.dy                  = 0
+        self.attack_target       = None
+        self.is_attacking        = False
+        self.attack_timer        = 0.0
+        self.attack_windup_timer = 0.0
+        self._pending_damage     = 0
+        self.is_dead             = False
+        self.bush_idx            = -1
+        self.pull_vx             = 0.0
+        self.pull_vy             = 0.0
+        self.pull_timer          = 0.0
 
     def reset_full(self, x, y):
         self.reset_on_spawn(x, y)
@@ -158,7 +162,7 @@ class Player(EntityBase):
                     ab.is_active = False
 
     def to_dict(self):
-        return {
+        d = {
             "id":           self.id,
             "hero":         self.hero,
             "team":         self.team,
@@ -167,26 +171,22 @@ class Player(EntityBase):
             "max_hp":       self.max_hp,
             "mana":         self.mana,
             "max_mana":     self.max_mana,
-            "attack_damage": self.attack_damage,
-            "ability_power": self.ability_power,
             "attack_range": self.attack_range,
-            "armor":        self.armor,
-            "magic_resist": self.magic_resist,
-            "speed":        self.speed,
             "gold":         self.gold,
             "vision":       self.vision,
             "is_dead":      self.is_dead,
-            "respawn_timer":  round(self.respawn_timer,  2),
-            "stun_timer":     round(self.stun_timer,     2),
-            "slow_timer":     round(self.slow_timer,     2),
-            "root_timer":     round(self.root_timer,     2),
-            "bleed_timer":    round(self.bleed_timer,    2),
-            "revealed_timer": round(self.revealed_timer, 2),
             "is_invisible": self.is_invisible,
             "bush_idx":     self.bush_idx,
             "abilities":    [a.to_dict() if a else None for a in self.abilities],
             "inventory":    self.inventory[:],
         }
+        if self.respawn_timer  > 0: d["respawn_timer"]  = round(self.respawn_timer,  2)
+        if self.stun_timer     > 0: d["stun_timer"]     = round(self.stun_timer,     2)
+        if self.slow_timer     > 0: d["slow_timer"]     = round(self.slow_timer,     2)
+        if self.root_timer     > 0: d["root_timer"]     = round(self.root_timer,     2)
+        if self.bleed_timer    > 0: d["bleed_timer"]    = round(self.bleed_timer,    2)
+        if self.revealed_timer > 0: d["revealed_timer"] = round(self.revealed_timer, 2)
+        return d
 
 
 #-------------------------------------------------------------------------------------------------------------------Trap
@@ -291,104 +291,3 @@ class BurningArea:
             "owner_team": self.owner_team,
         }
 
-
-#-------------------------------------------------------------------------------------------------------------------PlayerTurret
-class PlayerTurret:
-    _s         = ENTITY_STATS['PlayerTurret']
-    HP         = _s['hp']
-    ARMOR      = _s['armor']
-    ATK_RANGE  = _s['atk_range']
-    ATK_DMG    = _s['atk_dmg']
-    ATK_SPEED  = _s['atk_speed']
-    VISION     = _s['vision']
-    SIZE       = _s['size']
-    PROJ_SPEED = _s['proj_speed']
-
-    def __init__(self, turret_id, owner_id, team, x, y):
-        self.id            = turret_id
-        self.owner_id      = owner_id
-        self.team          = team
-        self.x             = x
-        self.y             = y
-        self.hp            = self.HP
-        self.max_hp        = self.HP
-        self.armor         = self.ARMOR
-        self.attack_range  = self.ATK_RANGE
-        self.attack_damage = self.ATK_DMG
-        self.attack_speed  = self.ATK_SPEED
-        self.vision        = self.VISION
-        self.size          = self.SIZE
-        self.proj_speed    = self.PROJ_SPEED
-        self.attack_timer  = 0.0
-        self.is_destroyed  = False
-
-    def to_dict(self):
-        return {
-            "id":           self.id,
-            "owner_id":     self.owner_id,
-            "team":         self.team,
-            "x":            self.x,
-            "y":            self.y,
-            "hp":           self.hp,
-            "max_hp":       self.max_hp,
-            "attack_range": self.attack_range,
-            "vision":       self.vision,
-            "size":         self.size,
-            "is_destroyed": self.is_destroyed,
-        }
-
-
-#-------------------------------------------------------------------------------------------------------------------Banner
-class Banner:
-    _s           = ENTITY_STATS['Banner']
-    HP           = _s['hp']
-    ARMOR        = _s['armor']
-    VISION       = _s['vision']
-    SIZE         = _s['size']
-    DURATION     = _s['duration']
-    HEAL_RADIUS  = _s['heal_radius']
-    HEAL_PCT_SEC = _s['heal_pct_sec']
-
-    def __init__(self, banner_id, owner_id, team, x, y):
-        self.id           = banner_id
-        self.owner_id     = owner_id
-        self.team         = team
-        self.x            = x
-        self.y            = y
-        self.hp           = self.HP
-        self.max_hp       = self.HP
-        self.armor        = self.ARMOR
-        self.vision       = self.VISION
-        self.size         = self.SIZE
-        self.duration     = self.DURATION
-        self.is_destroyed = False
-
-    def update(self, dt, players):
-        if self.is_destroyed:
-            return
-        self.duration -= dt
-        if self.duration <= 0:
-            self.is_destroyed = True
-            return
-        r2 = self.HEAL_RADIUS ** 2
-        for p in players.values():
-            if p.is_dead or p.team != self.team:
-                continue
-            dx, dy = p.x - self.x, p.y - self.y
-            if dx * dx + dy * dy <= r2:
-                p.hp = min(p.max_hp, p.hp + p.max_hp * self.HEAL_PCT_SEC * dt)
-
-    def to_dict(self):
-        return {
-            "id":           self.id,
-            "owner_id":     self.owner_id,
-            "team":         self.team,
-            "x":            self.x,
-            "y":            self.y,
-            "hp":           self.hp,
-            "max_hp":       self.max_hp,
-            "size":         self.size,
-            "vision":       self.vision,
-            "duration":     round(self.duration, 1),
-            "is_destroyed": self.is_destroyed,
-        }

@@ -2,8 +2,8 @@
 from server.entities import Player, HERO_REGISTRY
 from server.abilities import Stealth
 from server.systems.combat import _break_stealth
-from server.buildings import BuildingHeadquarter, CapturePoint, ShopBuilding
-from server.systems.movement import apply_movement
+from server.buildings import BuildingHeadquarter, CapturePoint, ShopBuilding, Tower
+from server.systems.movement import apply_movement, apply_pull
 from server.systems.ability import update_abilities
 from server.systems.combat import resolve_combat, resolve_turret_combat
 from server.systems.effects import update_effects
@@ -51,6 +51,16 @@ class GameState:
         for i, (x, y) in enumerate(CAPTURE_ZONES):
             bid = i + 2
             self.buildings[bid] = CapturePoint(bid, x, y)
+
+        # Towers — placed in front of each HQ, guard access to the base
+        t1_bid = len(CAPTURE_ZONES) + 2
+        t2_bid = len(CAPTURE_ZONES) + 3
+        tower1 = Tower(t1_bid, 1, 190, 190)
+        tower2 = Tower(t2_bid, 2, 1040, 560)
+        self.buildings[t1_bid] = tower1
+        self.buildings[t2_bid] = tower2
+        self.buildings[0].shield_tower = tower1
+        self.buildings[1].shield_tower = tower2
 
         self.shops = {
             0: ShopBuilding(0, 80,  700),
@@ -168,6 +178,7 @@ class GameState:
         for hook in list(self.hook_projectiles.values()):
             hook.update(dt, self.players)
         self.hook_projectiles = {k: v for k, v in self.hook_projectiles.items() if not v.is_done}
+        apply_pull(self.players, dt)
         minerals_done = self._minerals_exhausted()
         self._handle_respawns(dt, minerals_done)
 
@@ -175,6 +186,8 @@ class GameState:
         if self.game_phase == "live":
             for building in self.buildings.values():
                 building.update(dt, self.players)
+                if hasattr(building, 'update_attack'):
+                    building.update_attack(dt, self.players, self.projectiles, self._proj_counter)
             update_rune(self.rune, self.players, minerals_done, dt)
             self._check_win(minerals_done)
 

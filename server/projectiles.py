@@ -140,6 +140,7 @@ class HookProjectile:
     MAX_RANGE  = _s['max_range']
     HIT_RADIUS = _s['hit_radius']
     PULL_DIST  = _s['pull_dist']
+    PULL_DUR   = _s['pull_dur']
     DAMAGE     = _s['damage']
     STUN_DUR   = _s['stun_dur']
 
@@ -158,16 +159,9 @@ class HookProjectile:
     def update(self, dt, players):
         if self.is_done:
             return
-        import pygame  # map_data imports pygame; deferred to keep server startup lean
-        from shared.map_data import OBSTACLES
-        nx = self.x + self.vx * dt
-        ny = self.y + self.vy * dt
-        hit_box = pygame.Rect(int(nx - 4), int(ny - 4), 8, 8)
-        if any(obs.colliderect(hit_box) for obs in OBSTACLES):
-            self.is_done = True
-            return
-        self.x, self.y  = nx, ny
-        self.traveled   += self.SPEED * dt
+        self.x         += self.vx * dt
+        self.y         += self.vy * dt
+        self.traveled  += self.SPEED * dt
         if self.traveled >= self.MAX_RANGE:
             self.is_done = True
             return
@@ -192,9 +186,12 @@ class HookProjectile:
         dist = math.sqrt(dx * dx + dy * dy)
         if dist <= self.PULL_DIST:
             return
-        ratio    = (dist - self.PULL_DIST) / dist
-        target.x += dx * ratio
-        target.y += dy * ratio
+        # Velocity-based pull — target flies through the air over PULL_DUR seconds
+        travel      = dist - self.PULL_DIST
+        nx, ny      = dx / dist, dy / dist
+        target.pull_vx    = nx * travel / self.PULL_DUR
+        target.pull_vy    = ny * travel / self.PULL_DUR
+        target.pull_timer = self.PULL_DUR
 
     def to_dict(self):
         return {
@@ -239,6 +236,9 @@ def apply_damage(target, raw_damage, armor, killer=None):
                     raw_damage = int(raw_damage * ab.crit_mult)
                     is_crit = True
                 break
+
+    if getattr(target, 'is_invulnerable', False):
+        return
 
     damage = max(1, raw_damage - effective_armor)
     target.hp -= damage

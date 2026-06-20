@@ -8,7 +8,7 @@ def resolve_combat(players, buildings, player_turrets, banners, dt, projectiles,
     for player in players.values():
         if player.is_dead:
             continue
-        _tick_windup(player, dt)
+        _tick_windup(player, dt, players, buildings, player_turrets, banners)
         _tick_attack(player, players, buildings, player_turrets, banners, dt, projectiles, proj_counter)
 
 
@@ -38,12 +38,28 @@ def resolve_turret_combat(player_turrets, players, dt, projectiles, proj_counter
 # Player attack helpers
 # ---------------------------------------------------------------------------
 
-def _tick_windup(player, dt):
-    """Count down the visual attack-swing state set when an attack fires."""
-    if player.is_attacking:
-        player.attack_windup_timer -= dt
-        if player.attack_windup_timer <= 0:
-            player.is_attacking = False
+def _tick_windup(player, dt, players, buildings, player_turrets, banners):
+    """Pre-fire melee swing timer. Damage fires here when windup expires, not in _tick_attack."""
+    if not player.is_attacking:
+        return
+    if player.is_dead:
+        player.is_attacking    = False
+        player._pending_damage = 0
+        return
+    player.attack_windup_timer -= dt
+    if player.attack_windup_timer > 0:
+        return
+    # Windup complete — fire committed melee hit (no range re-check)
+    player.is_attacking = False
+    player.attack_timer = 1.0 / player.attack_speed
+    if not player.attack_target:
+        return
+    target_type, target_id = player.attack_target
+    target = _get_target(target_type, target_id, players, buildings, player_turrets, banners)
+    if target and not _is_gone(target):
+        apply_damage(target, player._pending_damage, target.armor, killer=player)
+        apply_on_hit_effects(player, target)
+        _notify_auto_hit(target)
 
 
 def _tick_attack(player, players, buildings, player_turrets, banners, dt, projectiles, proj_counter):
@@ -69,20 +85,21 @@ def _tick_attack(player, players, buildings, player_turrets, banners, dt, projec
         player.attack_target = None
         return
 
-    # Out of range — hold target but don't tick the timer
-    if not _in_range(player, target):
+    # Skip if already in a melee windup (damage will fire from _tick_windup)
+    if player.is_attacking:
         return
 
-    # Count down between attacks
+    # Count down between attacks; only check range when timer expires
     player.attack_timer -= dt
     if player.attack_timer > 0:
         return
 
-    # Fire — reset timer but keep target so the next swing happens automatically
-    player.attack_timer = 1.0 / player.attack_speed
-    player.is_attacking = True
-    player.attack_windup_timer = ATTACK_WINDUP
+    # Timer expired — check range before committing
+    if not _in_range(player, target):
+        player.attack_timer = 0.0   # stays primed; commits on next in-range tick
+        return
 
+    # Build damage value — capture stealth mult and break stealth at commit time
     damage = player.attack_damage
     if getattr(player, '_stealth_bonus_ready', False):
         stealth_ab = next((ab for ab in player.abilities if isinstance(ab, Stealth)), None)
@@ -91,11 +108,15 @@ def _tick_attack(player, players, buildings, player_turrets, banners, dt, projec
     _break_stealth(player)
 
     if player.is_ranged:
+        # Ranged: projectile fires immediately; tracking makes it committed
+        player.attack_timer = 1.0 / player.attack_speed
         _fire_projectile(player, target_type, int(target_id), target.armor, projectiles, proj_counter, damage)
     else:
-        apply_damage(target, damage, target.armor, killer=player)
-        apply_on_hit_effects(player, target)
-        _notify_auto_hit(target)
+        # Melee: commit to swing — damage fires after ATTACK_WINDUP in _tick_windup
+        player._pending_damage     = damage
+        player.is_attacking        = True
+        player.attack_windup_timer = ATTACK_WINDUP
+        # attack_timer stays at 0; _tick_windup resets it after damage fires
 
 
 def _fire_projectile(player, target_type, target_id, target_armor, projectiles, proj_counter, damage=None):
@@ -146,11 +167,15 @@ def _find_turret_target(turret, players):
 # ---------------------------------------------------------------------------
 
 def _get_target(target_type, target_id, players, buildings, player_turrets, banners):
+    try:
+        target_id = int(target_id)
+    except (ValueError, TypeError):
+        return None
     match target_type:
-        case "player":   return players.get(int(target_id))
-        case "building": return buildings.get(int(target_id))
-        case "turret":   return player_turrets.get(int(target_id))
-        case "banner":   return banners.get(int(target_id))
+        case "player":   return players.get(target_id)
+        case "building": return buildings.get(target_id)
+        case "turret":   return player_turrets.get(target_id)
+        case "banner":   return banners.get(target_id)
     return None
 
 

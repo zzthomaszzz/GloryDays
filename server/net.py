@@ -41,9 +41,10 @@ class GameServer:
 
         try:
             hero_name = "Player"
-            deadline = asyncio.get_event_loop().time() + 15.0
+            loop     = asyncio.get_running_loop()
+            deadline = loop.time() + 15.0
             while True:
-                remaining = max(0.1, deadline - asyncio.get_event_loop().time())
+                remaining = max(0.1, deadline - loop.time())
                 hero_line = await asyncio.wait_for(reader.readline(), timeout=remaining)
                 if not hero_line:
                     writer.close()
@@ -67,7 +68,9 @@ class GameServer:
                     if hero_msg.get("type") != "hero_select":
                         break
                     if hero_msg.get("version") != GAME_VERSION:
-                        reply = {"type": "error", "msg": f"Version mismatch — server requires v{GAME_VERSION}. Please update your client."}
+                        client_ver = hero_msg.get("version", "unknown")
+                        print(f"[!] Player {player_id} rejected: version mismatch (client={client_ver}, server={GAME_VERSION})")
+                        reply = {"type": "error", "msg": f"Version mismatch — server is v{GAME_VERSION} but your client is v{client_ver}. Download the latest version."}
                         writer.write((json.dumps(reply) + "\n").encode())
                         await writer.drain()
                         writer.close()
@@ -82,6 +85,7 @@ class GameServer:
             return
 
         if self.game_state.game_phase == "ended":
+            print(f"[!] Player {player_id} rejected: server is resetting after game end")
             reply = {"type": "error", "msg": "Server is resetting after the last game. Try again in a moment."}
             writer.write((json.dumps(reply) + "\n").encode())
             await writer.drain()
@@ -91,7 +95,12 @@ class GameServer:
         self.game_state.add_player(player_id, team, hero_name)
         self.writers[player_id] = writer
 
-        welcome = {"type": "welcome", "player_id": player_id, "team": team}
+        welcome = {
+            "type":      "welcome",
+            "player_id": player_id,
+            "team":      team,
+            "shops":     {str(k): s.to_dict() for k, s in self.game_state.shops.items()},
+        }
         writer.write((json.dumps(welcome) + "\n").encode())
         await writer.drain()
         print(f"Player {player_id} connected as {hero_name} (team {team})")
@@ -114,9 +123,14 @@ class GameServer:
             print(f"Player {player_id} disconnected")
 
     async def broadcast_loop(self):
+        loop     = asyncio.get_running_loop()
+        last_tick = loop.time()
         while True:
-            self.game_state.match_time += self.snapshot_interval
-            self.game_state.update(self.snapshot_interval)
+            now = loop.time()
+            dt  = now - last_tick
+            last_tick = now
+            self.game_state.match_time += dt
+            self.game_state.update(dt)
 
             snapshot = make_snapshot(
                 self.game_state.match_time,
@@ -127,7 +141,6 @@ class GameServer:
                 fireball_projectiles=self.game_state.fireball_projectiles,
                 burning_areas=self.game_state.burning_areas,
                 banners=self.game_state.banners,
-                shops=self.game_state.shops,
                 events=[],
                 game_phase=self.game_state.game_phase,
                 countdown_timer=self.game_state.countdown_timer,
@@ -142,11 +155,18 @@ class GameServer:
             )
             data = (json.dumps(snapshot) + "\n").encode()
 
-            for writer in list(self.writers.values()):
+            stale = []
+            for pid, writer in list(self.writers.items()):
+                if writer.transport.get_write_buffer_size() > 65_536:
+                    stale.append(pid)
+                    continue
                 try:
                     writer.write(data)
                 except Exception:
-                    pass
+                    stale.append(pid)
+            for pid in stale:
+                print(f"[!] Player {pid} write buffer full — disconnecting")
+                self.writers.pop(pid, None).close()
 
             await asyncio.sleep(self.snapshot_interval)
 

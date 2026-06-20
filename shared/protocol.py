@@ -24,7 +24,7 @@ def make_hero_select_message(hero_name):
 # --- Server -> Client ---
 
 def make_snapshot(match_time, players, buildings, projectiles=None, player_turrets=None,
-                  fireball_projectiles=None, burning_areas=None, banners=None, shops=None,
+                  fireball_projectiles=None, burning_areas=None, banners=None,
                   winner=None, events=None, game_phase="live", countdown_timer=0.0,
                   ready_players=None, wait_elapsed=0.0, minerals_exhausted=False, rune=None,
                   traps=None, bolt_projectiles=None, hook_projectiles=None):
@@ -56,7 +56,6 @@ def make_snapshot(match_time, players, buildings, projectiles=None, player_turre
         "turrets":              {str(k): t.to_dict() for k, t in (player_turrets or {}).items()},
         "burning_areas":        {str(k): b.to_dict() for k, b in (burning_areas or {}).items()},
         "banners":              {str(k): b.to_dict() for k, b in (banners or {}).items()},
-        "shops":                {str(k): s.to_dict() for k, s in (shops or {}).items()},
         "traps":                {str(k): t.to_dict() for k, t in (traps or {}).items()},
         "bolt_projectiles":     {str(k): b.to_dict() for k, b in (bolt_projectiles or {}).items()},
         "hook_projectiles":     {str(k): h.to_dict() for k, h in (hook_projectiles or {}).items()},

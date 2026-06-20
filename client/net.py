@@ -21,6 +21,7 @@ class NetworkClient:
 
         self.my_player_id = None
         self.my_team = None
+        self.shops = {}
         self.is_connected = True
 
     async def connect(self):
@@ -57,6 +58,7 @@ class NetworkClient:
             if msg.get("type") == "welcome":
                 self.my_player_id = str(msg["player_id"])
                 self.my_team = msg["team"]
+                self.shops = msg.get("shops", {})
                 continue
             self.previous_snapshot = self.latest_snapshot
             self.latest_snapshot = msg
@@ -163,14 +165,16 @@ class NetworkClient:
 
 async def ping_server(host, port, timeout=4.0):
     try:
+        t0 = time.perf_counter()
         reader, writer = await asyncio.wait_for(
             asyncio.open_connection(host, port), timeout=timeout
         )
         writer.write((json.dumps({"type": "status"}) + "\n").encode())
         await writer.drain()
         line = await asyncio.wait_for(reader.readline(), timeout=timeout)
+        ping_ms = int((time.perf_counter() - t0) * 1000)
         data = json.loads(line.decode())
         writer.close()
-        return {"online": True, **data}
+        return {"online": True, "ping_ms": ping_ms, **data}
     except Exception:
         return {"online": False}

@@ -7,9 +7,22 @@ from shared.map_data import OBSTACLES
 _HALF = 16  # player is 32x32, center-based position
 
 
+def apply_pull(players, dt):
+    """Slide hook-pulled players toward the Watcher over pull_timer duration."""
+    for player in players.values():
+        if player.pull_timer <= 0:
+            continue
+        player.pull_timer -= dt
+        player.x = max(_HALF, min(player.x + player.pull_vx * dt, MAP_W - _HALF))
+        player.y = max(_HALF, min(player.y + player.pull_vy * dt, MAP_H - _HALF))
+        if player.pull_timer <= 0:
+            player.pull_vx = 0.0
+            player.pull_vy = 0.0
+
+
 def apply_movement(players, dt):
     for player in players.values():
-        if player.is_dead or player.is_attacking:
+        if player.is_dead or player.is_attacking:   # is_attacking = True during pre-fire melee windup
             continue
         if player.stun_timer > 0 or player.root_timer > 0:
             continue

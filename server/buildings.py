@@ -1,15 +1,57 @@
-# Building classes: ShopBuilding, BuildingBase, BuildingHeadquarter, CapturePoint
-from shared.constants import (
-    BASE_VISION, BUILDING_SIZE,
-    MINERAL_START, CAPTURE_MINERAL_START, MINERALS_PER_TICK, GOLD_PER_MINERAL, GOLD_TICK_INTERVAL,
-    CAPTURE_TIME, CAPTURE_RADIUS, CAPTURE_SIZE, CAPTURE_VISION, CAPTURE_HP,
-)
+# Building classes: ShopBuilding, BuildingBase, BuildingHeadquarter, CapturePoint, Tower,
+#                   PlayerTurret, Banner
+
+BUILDING_STATS = {
+    'Headquarter': dict(
+        size=48, vision=150,
+        hp=800, armor=20,
+        mineral_start=200,
+        minerals_per_tick=2,
+        gold_per_mineral=1,
+        gold_tick_interval=5.0,
+    ),
+    'CapturePoint': dict(
+        size=32, vision=75,
+        hp=300, armor=20,
+        mineral_start=50,
+        minerals_per_tick=2,
+        gold_per_mineral=1,
+        gold_tick_interval=5.0,
+        capture_time=5.0,
+        capture_radius=48,
+    ),
+    'Tower': dict(
+        size=32, vision=200,
+        hp=400, armor=30,
+        attack_range=150, attack_damage=70,
+        attack_speed=0.8, proj_speed=300,
+    ),
+    'PlayerTurret': dict(
+        size=20, vision=150,
+        hp=150, armor=7,
+        atk_range=120, atk_dmg=25,
+        atk_speed=1.5, proj_speed=200,
+    ),
+    'Banner': dict(
+        size=20, vision=130,
+        hp=1, armor=0,
+        duration=10.0, heal_radius=100, heal_pct_sec=0.02,
+    ),
+    'Shop': dict(size=32, range=120),
+}
+
+_HQ = BUILDING_STATS['Headquarter']
+_CP = BUILDING_STATS['CapturePoint']
+_T  = BUILDING_STATS['Tower']
+_PT = BUILDING_STATS['PlayerTurret']
+_BN = BUILDING_STATS['Banner']
+_SH = BUILDING_STATS['Shop']
 
 
 #-------------------------------------------------------------------------------------------------------------------ShopBuilding
 class ShopBuilding:
-    SIZE  = 32
-    RANGE = 120   # proximity radius for purchasing
+    SIZE  = _SH['size']
+    RANGE = _SH['range']
 
     def __init__(self, shop_id, x, y):
         self.shop_id = shop_id
@@ -55,7 +97,6 @@ class BuildingBase:
             "vision":       self.vision,
             "hp":           self.hp,
             "max_hp":       self.max_hp,
-            "armor":        self.armor,
             "is_destroyed": self.is_destroyed,
         }
 
@@ -63,39 +104,45 @@ class BuildingBase:
 #-------------------------------------------------------------------------------------------------------------------HQ
 class BuildingHeadquarter(BuildingBase):
     def __init__(self, team, x, y):
-        super().__init__(BUILDING_SIZE, x, y, BASE_VISION, hp=800, armor=10)
+        super().__init__(_HQ['size'], x, y, _HQ['vision'], hp=_HQ['hp'], armor=_HQ['armor'])
         self.team         = team
-        self.mineral_pool = MINERAL_START
+        self.mineral_pool = _HQ['mineral_start']
         self._gold_timer  = 0.0
+        self.shield_tower = None   # set by GameState after towers are created
+
+    @property
+    def is_invulnerable(self):
+        return self.shield_tower is not None and not self.shield_tower.is_destroyed
 
     def update(self, dt, players):
         if self.is_destroyed or self.mineral_pool <= 0:
             return
         self._gold_timer += dt
-        if self._gold_timer >= GOLD_TICK_INTERVAL:
+        if self._gold_timer >= _HQ['gold_tick_interval']:
             self._gold_timer = 0.0
-            self.mineral_pool = max(0, self.mineral_pool - MINERALS_PER_TICK)
+            self.mineral_pool = max(0, self.mineral_pool - _HQ['minerals_per_tick'])
             for player in players.values():
                 if player.team == self.team:
-                    player.gold += GOLD_PER_MINERAL
+                    player.gold += _HQ['gold_per_mineral']
 
     def to_dict(self):
         d = super().to_dict()
-        d["team"]         = self.team
-        d["mineral_pool"] = self.mineral_pool
+        d["team"]            = self.team
+        d["mineral_pool"]    = self.mineral_pool
+        d["is_invulnerable"] = self.is_invulnerable
         return d
 
 
 #-------------------------------------------------------------------------------------------------------------------CapturePoint
 class CapturePoint(BuildingBase):
     def __init__(self, bid, x, y):
-        super().__init__(CAPTURE_SIZE, x, y, CAPTURE_VISION, hp=CAPTURE_HP, armor=20)
+        super().__init__(_CP['size'], x, y, _CP['vision'], hp=_CP['hp'], armor=_CP['armor'])
         self.bid            = bid
         self.team           = 0        # 0 = neutral
         self.capture_timer  = 0.0
         self.capturing_team = None
         self._gold_timer    = 0.0
-        self._mineral_pool  = CAPTURE_MINERAL_START
+        self._mineral_pool  = _CP['mineral_start']
 
     def _reset(self):
         self.team           = 0
@@ -108,12 +155,12 @@ class CapturePoint(BuildingBase):
     def update(self, dt, players):
         if self.is_destroyed:
             if self._mineral_pool > 0:
-                self._reset()   # minerals remain — point respawns and can be recaptured
-            return              # no minerals — stays permanently destroyed
+                self._reset()
+            return
 
         cx = self.x + self.size // 2
         cy = self.y + self.size // 2
-        r2 = CAPTURE_RADIUS * CAPTURE_RADIUS
+        r2 = _CP['capture_radius'] ** 2
 
         teams_present = set()
         for player in players.values():
@@ -127,31 +174,155 @@ class CapturePoint(BuildingBase):
         if len(teams_present) == 1:
             contesting = next(iter(teams_present))
             if contesting != self.team:
-                if self.capturing_team != contesting:
-                    self.capturing_team = contesting
-                    self.capture_timer  = 0.0
-                self.capture_timer += dt
-                if self.capture_timer >= CAPTURE_TIME:
-                    self.team           = contesting
-                    self.capture_timer  = 0.0
-                    self.capturing_team = None
+                if self.team == 0:
+                    # Neutral — can be captured normally
+                    if self.capturing_team != contesting:
+                        self.capturing_team = contesting
+                        self.capture_timer  = 0.0
+                    self.capture_timer += dt
+                    if self.capture_timer >= _CP['capture_time']:
+                        self.team           = contesting
+                        self.capture_timer  = 0.0
+                        self.capturing_team = None
+                # else: owned by enemy — must destroy it first before capturing
         else:
             self.capture_timer  = 0.0
             self.capturing_team = None
 
         if self.team != 0 and self._mineral_pool > 0:
             self._gold_timer += dt
-            if self._gold_timer >= GOLD_TICK_INTERVAL:
+            if self._gold_timer >= _CP['gold_tick_interval']:
                 self._gold_timer = 0.0
-                self._mineral_pool = max(0, self._mineral_pool - MINERALS_PER_TICK)
+                self._mineral_pool = max(0, self._mineral_pool - _CP['minerals_per_tick'])
                 for player in players.values():
                     if player.team == self.team:
-                        player.gold += GOLD_PER_MINERAL
+                        player.gold += _CP['gold_per_mineral']
 
     def to_dict(self):
         d = super().to_dict()
         d["team"]           = self.team
         d["capture_timer"]  = round(self.capture_timer, 2)
-        d["capture_time"]   = CAPTURE_TIME
+        d["capture_time"]   = _CP['capture_time']
         d["capturing_team"] = self.capturing_team
         return d
+
+
+#-------------------------------------------------------------------------------------------------------------------Tower
+class Tower(BuildingBase):
+    def __init__(self, tower_id, team, x, y):
+        super().__init__(_T['size'], x, y, _T['vision'], hp=_T['hp'], armor=_T['armor'])
+        self.id            = tower_id
+        self.team          = team
+        self._attack_timer = 0.0
+
+    def update_attack(self, dt, players, projectiles, proj_counter):
+        if self.is_destroyed:
+            return
+        self._attack_timer -= dt
+        if self._attack_timer > 0:
+            return
+        target = self._find_target(players)
+        if not target:
+            return
+        from server.projectiles import Projectile
+        self._attack_timer = 1.0 / _T['attack_speed']
+        pid = proj_counter[0]
+        proj_counter[0] += 1
+        projectiles[pid] = Projectile(
+            pid, self.id, self.team,
+            self.cx, self.cy,
+            "player", target.id,
+            _T['attack_damage'], target.armor,
+            _T['proj_speed'],
+        )
+
+    def _find_target(self, players):
+        best    = None
+        best_d2 = _T['attack_range'] ** 2
+        for p in players.values():
+            if p.is_dead or p.team == self.team:
+                continue
+            dx = p.x - self.cx
+            dy = p.y - self.cy
+            d2 = dx*dx + dy*dy
+            if d2 <= best_d2:
+                best_d2 = d2
+                best    = p
+        return best
+
+    def to_dict(self):
+        d = super().to_dict()
+        d["team"] = self.team
+        return d
+
+
+#-------------------------------------------------------------------------------------------------------------------PlayerTurret
+class PlayerTurret(BuildingBase):
+    def __init__(self, turret_id, owner_id, team, x, y):
+        super().__init__(_PT['size'], x, y, _PT['vision'], hp=_PT['hp'], armor=_PT['armor'])
+        self.id            = turret_id
+        self.owner_id      = owner_id
+        self.team          = team
+        self.attack_range  = _PT['atk_range']
+        self.attack_damage = _PT['atk_dmg']
+        self.attack_speed  = _PT['atk_speed']
+        self.proj_speed    = _PT['proj_speed']
+        self.attack_timer  = 0.0
+
+    def to_dict(self):
+        return {
+            "id":           self.id,
+            "owner_id":     self.owner_id,
+            "team":         self.team,
+            "x":            self.x,
+            "y":            self.y,
+            "hp":           self.hp,
+            "max_hp":       self.max_hp,
+            "attack_range": self.attack_range,
+            "vision":       self.vision,
+            "size":         self.size,
+            "is_destroyed": self.is_destroyed,
+        }
+
+
+#-------------------------------------------------------------------------------------------------------------------Banner
+class Banner(BuildingBase):
+    HEAL_RADIUS  = _BN['heal_radius']
+    HEAL_PCT_SEC = _BN['heal_pct_sec']
+
+    def __init__(self, banner_id, owner_id, team, x, y):
+        super().__init__(_BN['size'], x, y, _BN['vision'], hp=_BN['hp'], armor=_BN['armor'])
+        self.id       = banner_id
+        self.owner_id = owner_id
+        self.team     = team
+        self.duration = _BN['duration']
+
+    def update(self, dt, players):
+        if self.is_destroyed:
+            return
+        self.duration -= dt
+        if self.duration <= 0:
+            self.is_destroyed = True
+            return
+        r2 = self.HEAL_RADIUS ** 2
+        for p in players.values():
+            if p.is_dead or p.team != self.team:
+                continue
+            dx, dy = p.x - self.x, p.y - self.y
+            if dx * dx + dy * dy <= r2:
+                p.hp = min(p.max_hp, p.hp + p.max_hp * self.HEAL_PCT_SEC * dt)
+
+    def to_dict(self):
+        return {
+            "id":           self.id,
+            "owner_id":     self.owner_id,
+            "team":         self.team,
+            "x":            self.x,
+            "y":            self.y,
+            "hp":           self.hp,
+            "max_hp":       self.max_hp,
+            "size":         self.size,
+            "vision":       self.vision,
+            "duration":     round(self.duration, 1),
+            "is_destroyed": self.is_destroyed,
+        }

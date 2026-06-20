@@ -66,7 +66,7 @@ ABILITY_STATS = {
     'Hook': dict(
         cooldown=14.0, mana_cost=60, channel_time=0.6,
         speed=600, max_range=250, hit_radius=22,
-        pull_dist=60, damage=1200, stun_dur=1,
+        pull_dist=60, pull_dur=0.3, damage=120, stun_dur=1,
     ),
     'IronStack': dict(
         cooldown=0.0, mana_cost=0, max_stacks=10, armor_per_stack=5, stack_duration=5.0,
@@ -109,11 +109,8 @@ class AbilityBase:
     def to_dict(self):
         return {
             "name":           self.__class__.__name__,
-            "cooldown":       self.cooldown,
             "cooldown_timer": round(self.cooldown_timer, 2),
-            "mana_cost":      self.mana_cost,
             "is_on_cooldown": self.is_on_cooldown,
-            "is_placement":   False,
         }
 
 
@@ -324,8 +321,6 @@ class Mend(AbilityBase):
         d["is_targeted"]      = True
         d["is_ally_targeted"] = True
         d["cast_range"]       = self.cast_range
-        d["hp_cost"]          = self.hp_cost
-        d["heal_amount"]      = self.heal_amount
         return d
 
 
@@ -378,7 +373,6 @@ class GroundSlam(AbilityBase):
 
     def to_dict(self):
         d = super().to_dict()
-        d["slam_radius"] = self.slam_radius
         d["ring_active"] = self._ring_active
         d["ring_radius"] = round(self._ring_radius, 1)
         d["ring_x"]      = round(self._ring_x, 1)
@@ -613,7 +607,7 @@ class PlaceTurret(AbilityBase):
         return True
 
     def activate(self, player, targets, target_pos=None, game_state=None):
-        from server.entities import PlayerTurret  # avoids circular import
+        from server.buildings import PlayerTurret  # avoids circular import
         tx, ty = target_pos
         tid = game_state._turret_counter[0]
         game_state._turret_counter[0] += 1
@@ -622,7 +616,6 @@ class PlaceTurret(AbilityBase):
     def to_dict(self):
         d = super().to_dict()
         d["is_placement"] = True
-        d["max_turrets"]  = self.max_turrets
         d["place_range"]  = self.place_range
         return d
 
@@ -700,7 +693,6 @@ class Bushido(AbilityBase):
         d = super().to_dict()
         d["is_passive"]  = True
         d["crit_chance"] = self.crit_chance
-        d["crit_mult"]   = self.crit_mult
         return d
 
 
@@ -780,7 +772,6 @@ class PlaceTrap(AbilityBase):
         d = super().to_dict()
         d["is_placement"] = True
         d["place_range"]  = self.place_range
-        d["aoe_size"]     = 32
         return d
 
 
@@ -902,7 +893,7 @@ class PlaceBanner(AbilityBase):
         player.mana         -= self.mana_cost
         self.is_on_cooldown  = True
         self.cooldown_timer  = self.cooldown
-        from server.entities import Banner  # avoids circular import
+        from server.buildings import Banner  # avoids circular import
         bid = game_state._banner_counter[0]
         game_state._banner_counter[0] += 1
         game_state.banners[bid] = Banner(bid, player.id, player.team, tx, ty)
@@ -965,11 +956,11 @@ class Hook(AbilityBase):
 
     def to_dict(self):
         d = super().to_dict()
-        d["is_placement"]  = True
-        d["place_range"]   = 400
-        d["is_channeling"] = self.is_channeling
-        d["channel_timer"] = round(self.channel_timer, 2)
-        d["channel_time"]  = self.channel_time
+        d["is_point_cast"]  = True
+        d["cast_range"]     = ABILITY_STATS['Hook']['max_range']
+        d["is_channeling"]  = self.is_channeling
+        d["channel_timer"]  = round(self.channel_timer, 2)
+        d["channel_time"]   = self.channel_time
         return d
 
 
@@ -1007,11 +998,9 @@ class IronStack(AbilityBase):
 
     def to_dict(self):
         d = super().to_dict()
-        d["is_passive"]     = True
-        d["stacks"]         = self.stacks
-        d["max_stacks"]     = self.MAX_STACKS
-        d["stack_timer"]    = round(self.stack_timer, 2)
-        d["stack_duration"] = self.STACK_DURATION
+        d["is_passive"]  = True
+        d["stacks"]      = self.stacks
+        d["max_stacks"]  = self.MAX_STACKS
         return d
 
 
@@ -1067,5 +1056,4 @@ class BattleCry(AbilityBase):
         d["is_active"]      = self.is_active
         d["duration_timer"] = round(self.duration_timer, 2)
         d["duration"]       = self.duration
-        d["radius"]         = self.radius
         return d

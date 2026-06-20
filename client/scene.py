@@ -9,7 +9,7 @@ from client.map_system import MapSystem
 from client.effects import EffectsSystem, target_is_gone
 from client.hud import HudRenderer, TEAM_COLOURS, MINI_W, MINI_H, MINI_SX, MINI_SY, _build_item_icons
 from shared.constants import (
-    CLIENT_INPUT_INTERVAL, BASE_VISION, TURRET_VISION,
+    CLIENT_INPUT_INTERVAL,
     CLIENT_DEFAULT_HOST, SERVER_PORT, SNAPSHOT_INTERVAL,
     MAP_W, MAP_H,
     RUNE_X, RUNE_Y, RUNE_RADIUS, RUNE_CAPTURE_TIME,
@@ -433,6 +433,21 @@ class SceneMenu:
             name_col = (240, 200, 55) if is_sel else (210, 192, 142)
             srv_n = self._f_srv.render(srv["name"], True, name_col)
             ui_surf.blit(srv_n, (inner_x + 16, dot_cy))
+
+            ping_ms = info.get("ping_ms")
+            if online and ping_ms is not None:
+                if ping_ms < 50:
+                    ping_col = (60, 220, 90)
+                elif ping_ms < 100:
+                    ping_col = (220, 210, 60)
+                elif ping_ms < 150:
+                    ping_col = (225, 145, 40)
+                else:
+                    ping_col = (215, 60, 60)
+                ping_s = self._f_srv_sm.render(f"{ping_ms} ms", True, ping_col)
+                ui_surf.blit(ping_s, ping_s.get_rect(right=card_r.right - int(right_w * 0.07),
+                                                      centery=dot_cy + srv_n.get_height() // 2))
+
             cy = dot_cy + srv_n.get_height() + int(sh * 0.012)
 
             addr_s = self._f_srv_sm.render(srv["addr"], True, (118, 100, 55))
@@ -548,11 +563,6 @@ class SceneBase:
     def render_ui(self, ui_surf): pass
 
 
-VISION_BY_TYPE = {
-    "BuildingHeadquarter": BASE_VISION,
-    "CapturePoint":        BASE_VISION,
-    "Turret":              TURRET_VISION,
-}
 
 #-------------------------------------------------------------------------------------------------------------------Game
 class SceneTest(SceneBase):
@@ -560,7 +570,8 @@ class SceneTest(SceneBase):
         super().__init__(client)
         self.dx = 0
         self.dy = 0
-        self.input_send_timer = 0.0
+        self.input_send_timer  = 0.0
+        self._last_sent_input  = (0, 0)
         self.map_bg = pygame.image.load(os.path.join(_ROOT, "asset", "map.png")).convert()
         self.map_system = MapSystem(OBSTACLES, SPAWN_ZONES)
         self._prev_building_states = {}
@@ -810,7 +821,9 @@ class SceneTest(SceneBase):
         ability    = abilities[slot] if slot < len(abilities) else None
         if not ability:
             return
-        if ability.get("is_placement"):
+        if ability.get("is_on_cooldown"):
+            return
+        if ability.get("is_placement") or ability.get("is_point_cast"):
             self._placement_mode     = None if self._placement_mode == slot else slot
             self._entity_target_mode = None
         elif ability.get("is_targeted"):
@@ -916,9 +929,13 @@ class SceneTest(SceneBase):
             # Mirror server's movement-cancels-attack rule so the indicator clears too
             if attack is None and (self.dx != 0 or self.dy != 0):
                 self._local_attack_target = None
-            asyncio.create_task(
-                self.client.send_input(self.dx, self.dy, attack, ability, ability_target, ability_target_id)
-            )
+            has_event        = attack is not None or ability is not None or ability_target is not None or ability_target_id is not None
+            movement_changed = (self.dx, self.dy) != self._last_sent_input
+            if has_event or movement_changed:
+                self._last_sent_input = (self.dx, self.dy)
+                asyncio.create_task(
+                    self.client.send_input(self.dx, self.dy, attack, ability, ability_target, ability_target_id)
+                )
 
         snap = self.client.latest_snapshot
         buildings = snap.get("buildings", {})
@@ -934,7 +951,7 @@ class SceneTest(SceneBase):
             for b in buildings.values():
                 if not b.get("is_destroyed") and b.get("team") == my_team:
                     node = self.map_system.get_node_from_pos(b["x"], b["y"])
-                    vision = VISION_BY_TYPE.get(b.get("type"), BASE_VISION)
+                    vision = b.get("vision", 0)
                     sources.append((node, vision))
             self.map_system.compute_building_vision(sources)
             self._building_vision_dirty = False
@@ -1061,6 +1078,15 @@ class SceneTest(SceneBase):
             if b.get("team") != my_team and not self._is_visible(bx, by):
                 continue
             sx, sy = self._w2s(bx, by)
+            if btype == "Tower":
+                col = TEAM_COLOURS.get(b.get("team"), (180, 180, 180))
+                pygame.draw.rect(screen, col, (sx, sy, bs, bs))
+                inner = max(4, bs // 3)
+                offset = (bs - inner) // 2
+                pygame.draw.rect(screen, (20, 20, 20), (sx + offset, sy + offset, inner, inner))
+                if b["hp"] < b["max_hp"]:
+                    self._draw_hp_bar(screen, sx, sy - 8, bs, b["hp"], b["max_hp"])
+                continue
             hq_img = self._hq_imgs.get(b.get("team")) if btype == "BuildingHeadquarter" else None
             if hq_img:
                 screen.blit(hq_img, (sx, sy))
@@ -1068,6 +1094,8 @@ class SceneTest(SceneBase):
                 depleted = b.get("mineral_pool", 1) == 0
                 col = (80, 80, 80) if depleted else TEAM_COLOURS.get(b["team"], (180, 180, 180))
                 pygame.draw.rect(screen, col, (sx, sy, bs, bs))
+            if b.get("is_invulnerable"):
+                pygame.draw.rect(screen, (255, 220, 60), (sx - 3, sy - 3, bs + 6, bs + 6), 2)
             if b["hp"] < b["max_hp"]:
                 self._draw_hp_bar(screen, sx, sy - 8, bs, b["hp"], b["max_hp"])
 
@@ -1285,7 +1313,7 @@ class SceneTest(SceneBase):
             if t.get("hp", t.get("max_hp", 1)) < t.get("max_hp", 1):
                 self._draw_hp_bar(screen, tsx - sz // 2, tsy - sz // 2 - 6, sz, t.get("hp", 0), t.get("max_hp", 1))
 
-        for shop in snap.get("shops", {}).values():
+        for shop in self.client.shops.values():
             sx, sy = self._w2s(shop["x"], shop["y"])
             sz = shop["size"]
             pygame.draw.rect(screen, (140, 105, 20), (sx, sy, sz, sz))
@@ -1386,49 +1414,58 @@ class SceneTest(SceneBase):
             pygame.draw.circle(screen, (210, 110, 20), (hx, hy), 5)
             pygame.draw.circle(screen, (255, 190, 60), (hx, hy), 5, 2)
 
-        # Turret placement mode overlay
+        # Placement / point-cast aim overlay
         if self._placement_mode is not None:
             snap      = self.client.latest_snapshot
             my_data   = snap.get("players", {}).get(self.client.my_player_id, {})
             abilities  = my_data.get("abilities", [])
             ability    = abilities[self._placement_mode] if self._placement_mode < len(abilities) else None
-            place_range = ability.get("place_range", 50) if ability else 50
+            is_point_cast = ability.get("is_point_cast", False) if ability else False
+            aim_range = (ability.get("cast_range") or ability.get("place_range") or 50) if ability else 50
 
             my_pos = self.client.get_interpolated_pos("players", self.client.my_player_id)
             smx, smy = pygame.mouse.get_pos()
             wx = smx / _SCALE_X + self.cam_x
             wy = smy / _SCALE_Y + self.cam_y
 
-            # Clamp world cursor to place_range radius
+            # Clamp world cursor to aim_range radius
             if my_pos:
                 ddx = wx - my_pos[0]
                 ddy = wy - my_pos[1]
                 dist_sq = ddx * ddx + ddy * ddy
-                if dist_sq > place_range ** 2:
+                if dist_sq > aim_range ** 2:
                     dist = math.sqrt(dist_sq)
-                    wx = my_pos[0] + ddx / dist * place_range
-                    wy = my_pos[1] + ddy / dist * place_range
+                    wx = my_pos[0] + ddx / dist * aim_range
+                    wy = my_pos[1] + ddy / dist * aim_range
             self._clamped_placement_pos = (wx, wy)
 
             cx, cy = self._w2s(wx, wy)
 
             if my_pos:
                 px_v, py_v = self._w2s(my_pos[0], my_pos[1])
-                pygame.draw.circle(screen, (80, 80, 90), (px_v, py_v), int(place_range), 1)
 
-            aoe_size = ability.get("aoe_size") if ability else None
-            if aoe_size:
-                half = aoe_size // 2
-                aoe_surf = pygame.Surface((aoe_size, aoe_size), pygame.SRCALPHA)
-                aoe_surf.fill((220, 90, 20, 70))
-                screen.blit(aoe_surf, (cx - half, cy - half))
-                pygame.draw.rect(screen, (255, 140, 30), (cx - half, cy - half, aoe_size, aoe_size), 2)
-            else:
-                # PlaceTurret: attack range ring + diamond indicator
-                pygame.draw.circle(screen, (60, 200, 80), (cx, cy), 150, 1)
-                half = 8
-                pts  = [(cx, cy - half), (cx + half, cy), (cx, cy + half), (cx - half, cy)]
-                pygame.draw.polygon(screen, (60, 200, 80), pts, 2)
+                if is_point_cast:
+                    # Hook: range ring + aim line from player to cursor
+                    pygame.draw.circle(screen, (200, 140, 30), (px_v, py_v), int(aim_range), 1)
+                    pygame.draw.line(screen, (220, 160, 40), (px_v, py_v), (cx, cy), 2)
+                    pygame.draw.circle(screen, (220, 160, 40), (cx, cy), 5, 2)
+                else:
+                    pygame.draw.circle(screen, (80, 80, 90), (px_v, py_v), int(aim_range), 1)
+
+            if not is_point_cast:
+                aoe_size = ability.get("aoe_size") if ability else None
+                if aoe_size:
+                    half = aoe_size // 2
+                    aoe_surf = pygame.Surface((aoe_size, aoe_size), pygame.SRCALPHA)
+                    aoe_surf.fill((220, 90, 20, 70))
+                    screen.blit(aoe_surf, (cx - half, cy - half))
+                    pygame.draw.rect(screen, (255, 140, 30), (cx - half, cy - half, aoe_size, aoe_size), 2)
+                else:
+                    # PlaceTurret: attack range ring + diamond indicator
+                    pygame.draw.circle(screen, (60, 200, 80), (cx, cy), 150, 1)
+                    half = 8
+                    pts  = [(cx, cy - half), (cx + half, cy), (cx, cy + half), (cx - half, cy)]
+                    pygame.draw.polygon(screen, (60, 200, 80), pts, 2)
         else:
             self._clamped_placement_pos = None
 
@@ -1572,6 +1609,12 @@ class SceneTest(SceneBase):
             pygame.draw.circle(screen, col, (cx, cy), bs // 2)
             pygame.draw.circle(screen, (220, 220, 220), (cx, cy), bs // 2, 2)
 
+        # HP bar — shown when owned and damaged (must destroy to flip)
+        hp     = b.get("hp",     1)
+        max_hp = b.get("max_hp", 1)
+        if team != 0 and hp < max_hp:
+            self._draw_hp_bar(screen, cx - (bs + 16) // 2, sy - 10, bs + 16, hp, max_hp)
+
         cap_timer = b.get("capture_timer", 0)
         cap_time  = b.get("capture_time",  5)
         cont_team = b.get("capturing_team")
@@ -1579,8 +1622,9 @@ class SceneTest(SceneBase):
             cont_col = TEAM_COLOURS.get(cont_team, (200, 200, 200))
             bar_w    = bs + 16
             fill     = int(bar_w * (cap_timer / cap_time))
-            pygame.draw.rect(screen, (40, 40, 40), (cx - bar_w // 2, sy - 10, bar_w, 5))
-            pygame.draw.rect(screen, cont_col,     (cx - bar_w // 2, sy - 10, fill,  5))
+            bar_y    = sy - 17 if (team != 0 and hp < max_hp) else sy - 10
+            pygame.draw.rect(screen, (40, 40, 40), (cx - bar_w // 2, bar_y, bar_w, 5))
+            pygame.draw.rect(screen, cont_col,     (cx - bar_w // 2, bar_y, fill,  5))
 
     def _draw_hp_bar(self, screen, x, y, width, hp, max_hp):
         if max_hp <= 0:
