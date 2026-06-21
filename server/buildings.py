@@ -43,6 +43,8 @@ _PT = BUILDING_STATS['PlayerTurret']
 _BN = BUILDING_STATS['Banner']
 _SH = BUILDING_STATS['Shop']
 
+_TOWER_REVEAL_DUR = 0.5   # seconds an invisible enemy stays revealed while in tower range
+
 
 #-------------------------------------------------------------------------------------------------------------------ShopBuilding
 class ShopBuilding:
@@ -53,6 +55,7 @@ class ShopBuilding:
         self.shop_id = shop_id
         self.x       = x
         self.y       = y
+        self.size    = self.SIZE
 
     def to_dict(self):
         return {
@@ -214,6 +217,14 @@ class Tower(BuildingBase):
     def update_attack(self, dt, players, projectiles, proj_counter):
         if self.is_destroyed:
             return
+        r2 = _T['attack_range'] ** 2
+        for p in players.values():
+            if p.is_dead or p.team == self.team or not p.is_invisible:
+                continue
+            dx = p.x - self.cx
+            dy = p.y - self.cy
+            if dx * dx + dy * dy <= r2:
+                p.revealed_timer = max(p.revealed_timer, _TOWER_REVEAL_DUR)
         self._attack_timer -= dt
         if self._attack_timer > 0:
             return

@@ -1,8 +1,11 @@
 # Projectile classes and shared damage helpers (apply_damage, apply_on_hit_effects)
 import math
 import random
+import time
 
 from shared.constants import RESPAWN_TIME, KILL_GOLD
+
+_ASSIST_WINDOW = 10.0  # seconds a damage contribution counts toward an assist
 from server.abilities import ABILITY_STATS
 
 
@@ -20,8 +23,8 @@ class Projectile:
         self.speed       = speed
         self.is_done     = False
 
-    def update(self, dt, players, buildings, player_turrets=None, banners=None):
-        target = _resolve_target(self.target_type, self.target_id, players, buildings, player_turrets or {}, banners or {})
+    def update(self, dt, players, buildings, player_turrets=None, banners=None, traps=None):
+        target = _resolve_target(self.target_type, self.target_id, players, buildings, player_turrets or {}, banners or {}, traps or {})
         if not target or getattr(target, "is_dead", False) or getattr(target, "is_destroyed", False):
             self.is_done = True
             return
@@ -151,6 +154,7 @@ class HookProjectile:
     PULL_DIST  = _s['pull_dist']
     PULL_DUR   = _s['pull_dur']
     DAMAGE     = _s['damage']
+    AD_RATIO   = _s['ad_ratio']
     STUN_DUR   = _s['stun_dur']
 
     def __init__(self, proj_id, owner_id, owner_team, x, y, dx, dy):
@@ -185,9 +189,10 @@ class HookProjectile:
                 return
 
     def _apply_hook(self, target, players):
-        apply_damage(target, self.DAMAGE, target.armor)
-        target.stun_timer = max(getattr(target, 'stun_timer', 0), self.STUN_DUR)
         owner = players.get(self.owner_id)
+        damage = self.DAMAGE + int(getattr(owner, 'attack_damage', 0) * self.AD_RATIO)
+        apply_damage(target, damage, target.armor, killer=owner)
+        target.stun_timer = max(getattr(target, 'stun_timer', 0), self.STUN_DUR)
         if not owner or owner.is_dead:
             return
         dx   = owner.x - target.x
@@ -211,18 +216,115 @@ class HookProjectile:
         }
 
 
+class NetProjectile:
+    _LAND_LINGER = 0.4   # seconds the landed net stays visible before despawning
+
+    def __init__(self, proj_id, owner_id, owner_team, x, y, tx, ty, net_radius, root_dur, speed):
+        self.proj_id    = proj_id
+        self.owner_id   = owner_id
+        self.owner_team = owner_team
+        self.x          = float(x)
+        self.y          = float(y)
+        self.tx         = float(tx)
+        self.ty         = float(ty)
+        self.net_radius = net_radius
+        self.root_dur   = root_dur
+        self.speed      = speed
+        self.is_landed  = False
+        self._land_timer = 0.0
+        self.is_done    = False
+
+    def update(self, dt, players, buildings, player_turrets=None, banners=None, traps=None):
+        if self.is_landed:
+            self._land_timer -= dt
+            if self._land_timer <= 0:
+                self.is_done = True
+            return
+        dx, dy = self.tx - self.x, self.ty - self.y
+        dist   = math.sqrt(dx * dx + dy * dy)
+        step   = self.speed * dt
+        if dist <= step:
+            self.x, self.y  = self.tx, self.ty
+            self.is_landed  = True
+            self._land_timer = self._LAND_LINGER
+            self._apply_root(players)
+        else:
+            self.x += (dx / dist) * step
+            self.y += (dy / dist) * step
+
+    def _apply_root(self, players):
+        r2 = self.net_radius ** 2
+        for p in players.values():
+            if p.is_dead or p.team == self.owner_team:
+                continue
+            dx = p.x - self.x
+            dy = p.y - self.y
+            if dx * dx + dy * dy <= r2:
+                p.root_timer = max(p.root_timer, self.root_dur)
+
+    def to_dict(self):
+        return {
+            "x":          round(self.x, 1),
+            "y":          round(self.y, 1),
+            "owner_team": self.owner_team,
+            "is_net":     True,
+            "is_landed":  self.is_landed,
+            "radius":     self.net_radius,
+        }
+
+
+class FatedMissileProjectile:
+    def __init__(self, proj_id, owner_id, owner_team, x, y, target_id, damage, speed, stun_dur):
+        self.proj_id    = proj_id
+        self.owner_id   = owner_id
+        self.owner_team = owner_team
+        self.x          = float(x)
+        self.y          = float(y)
+        self.target_id  = int(target_id)
+        self.damage     = damage
+        self.speed      = speed
+        self.stun_dur   = stun_dur
+        self.is_done    = False
+
+    def update(self, dt, players, buildings, player_turrets=None, banners=None, traps=None):
+        target = players.get(self.target_id)
+        if not target or target.is_dead:
+            self.is_done = True
+            return
+        dx, dy = target.x - self.x, target.y - self.y
+        dist   = math.sqrt(dx * dx + dy * dy)
+        step   = self.speed * dt
+        if dist <= step:
+            killer = players.get(self.owner_id)
+            apply_damage(target, self.damage, 0, killer=killer)
+            target.stun_timer = max(getattr(target, 'stun_timer', 0), self.stun_dur)
+            self.is_done = True
+        else:
+            self.x += (dx / dist) * step
+            self.y += (dy / dist) * step
+
+    def to_dict(self):
+        return {
+            "x":                round(self.x, 1),
+            "y":                round(self.y, 1),
+            "owner_team":       self.owner_team,
+            "is_fated_missile": True,
+        }
+
+
 def _notify_auto_hit(target):
     for ab in getattr(target, 'abilities', []):
         if ab is not None and hasattr(ab, 'on_auto_hit'):
             ab.on_auto_hit(target)
 
 
-def _resolve_target(target_type, target_id, players, buildings, player_turrets, banners):
+def _resolve_target(target_type, target_id, players, buildings, player_turrets, banners, traps=None):
     match target_type:
         case "player":   return players.get(target_id)
         case "building": return buildings.get(target_id)
         case "turret":   return player_turrets.get(target_id)
         case "banner":   return banners.get(target_id)
+        case "trap":     return (traps or {}).get(target_id)
     return None
 
 
@@ -232,6 +334,9 @@ def apply_on_hit_effects(attacker, target):
     if any(item == 'Fang' for item in getattr(attacker, 'inventory', [])):
         target.armor_reduction = 10
         target.armor_reduction_timer = 3.0
+
+
+_ARMOR_SCALE = 3   # tune to adjust how strongly armor reduces damage
 
 
 def apply_damage(target, raw_damage, armor, killer=None):
@@ -249,11 +354,15 @@ def apply_damage(target, raw_damage, armor, killer=None):
     if getattr(target, 'is_invulnerable', False):
         return
 
-    damage = max(1, raw_damage - effective_armor)
+    damage = max(1, int(raw_damage * 100 // (100 + effective_armor * _ARMOR_SCALE)))
     target.hp -= damage
 
     if is_crit and killer is not None:
         killer.hp = min(killer.max_hp, killer.hp + damage)
+
+    # Log attacker for assist tracking (players only)
+    if killer is not None and hasattr(target, 'damage_log') and hasattr(killer, 'id'):
+        target.damage_log[killer.id] = time.monotonic()
 
     if target.hp <= 0:
         target.hp = 0
@@ -263,6 +372,9 @@ def apply_damage(target, raw_damage, armor, killer=None):
             target.is_dead = True
             target.respawn_timer = RESPAWN_TIME
             if killer is not None and getattr(killer, "team", None) != getattr(target, "team", None):
-                killer.gold  += KILL_GOLD
-                killer.kills += 1
-                target.deaths += 1
+                killer.gold        += KILL_GOLD
+                killer.kills       += 1
+                killer.kill_streak += 1
+                target.deaths      += 1
+                target._had_bounty       = getattr(target, 'kill_streak', 0) >= 3
+                target._assist_killer_id = getattr(killer, 'id', None)  # resolved in game_state.update

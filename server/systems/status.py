@@ -20,7 +20,7 @@ def tick_player_status(players, dt):
             player.root_timer = max(0.0, player.root_timer - dt)
         if player.bleed_timer > 0:
             from server.projectiles import apply_damage  # avoids circular import
-            apply_damage(player, player.bleed_dps * dt, 0)
+            apply_damage(player, player.bleed_dps * dt, player.armor)
             player.bleed_timer = max(0.0, player.bleed_timer - dt)
             if player.bleed_timer <= 0:
                 player.bleed_dps = 0.0

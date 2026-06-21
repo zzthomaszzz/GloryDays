@@ -3,43 +3,32 @@ name: Deploy to itch.io
 on:
   release:
     types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag (e.g. v2.0)'
+        required: true
 
 jobs:
   deploy:
     runs-on: windows-latest
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Set up Python 3.12
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      - name: Install dependencies
-        run: pip install pygame pyinstaller
-
-      - name: Build with PyInstaller
-        run: pyinstaller main.spec
-
-      - name: Copy assets into dist
+      - name: Download release asset
         shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          Remove-Item -Path "dist\asset" -Recurse -Force -ErrorAction SilentlyContinue
-          New-Item -ItemType Directory -Path "dist\asset" | Out-Null
-          Get-ChildItem "asset" | Copy-Item -Destination "dist\asset" -Recurse -Force
-
-      - name: Zip release
-        shell: pwsh
-        run: |
-          Compress-Archive -Path "dist\main.exe", "dist\asset" `
-            -DestinationPath "GloryDay_${{ github.ref_name }}.zip" -Force
+          $tag = if ("${{ github.event_name }}" -eq "workflow_dispatch") { "${{ github.event.inputs.tag }}" } else { "${{ github.ref_name }}" }
+          gh release download $tag `
+            --repo ${{ github.repository }} `
+            --pattern "*.zip" `
+            --dir .
 
       - name: Download butler
         shell: pwsh
         run: |
-          curl.exe -L -o butler.zip "https://broth.itch.ovh/butler/windows-amd64/LATEST/archive/default"
+          curl.exe -L -o butler.zip "https://broth.itch.zone/butler/windows-amd64/LATEST/archive/default"
           Expand-Archive -Path butler.zip -DestinationPath butler -Force
 
       - name: Push to itch.io
@@ -47,6 +36,7 @@ jobs:
         env:
           BUTLER_API_KEY: ${{ secrets.BUTLER_API_KEY }}
         run: |
-          $version = "${{ github.ref_name }}".TrimStart('v')
-          .\butler\butler.exe push "GloryDay_${{ github.ref_name }}.zip" `
-            thomasng/glory-days:windows --userversion $version
+          $zip = Get-ChildItem -Filter "*.zip" | Select-Object -First 1
+          $tag = if ("${{ github.event_name }}" -eq "workflow_dispatch") { "${{ github.event.inputs.tag }}" } else { "${{ github.ref_name }}" }
+          $version = $tag.TrimStart('v')
+          .\butler\butler.exe push $zip.Name thomasng/glory-days:windows --userversion $version

@@ -9,12 +9,13 @@ from server.systems.combat import resolve_combat, resolve_turret_combat
 from server.systems.effects import update_effects
 from server.systems.status import tick_player_status
 from server.systems.rune import update_rune
+from server.projectiles import _ASSIST_WINDOW
 from server.systems.shop import handle_purchase, handle_sell
 from shared.map_data import CAPTURE_ZONES, TOWER_POSITIONS
 
 SPAWN_POSITIONS = {
-    1: (60.0, 60.0),
-    2: (1220.0, 740.0),
+    1: (60.0,   100.0),   # below Team 1 HQ (HQ bottom edge y=80, player clears at y=100)
+    2: (1220.0, 700.0),   # above Team 2 HQ (HQ top edge y=720, player clears at y=700)
 }
 
 
@@ -214,13 +215,14 @@ class GameState:
                 self._go_live()
 
         tick_player_status(self.players, dt)
-        apply_movement(self.players, dt)
+        apply_movement(self.players, dt, collidables=[*self.buildings.values(), *self.player_turrets.values()])
         update_abilities(self.players, dt, game_state=self)
-        resolve_combat(self.players, self.buildings, self.player_turrets, self.banners, dt, self.projectiles, self._proj_counter)
+        resolve_combat(self.players, self.buildings, self.player_turrets, self.banners, dt, self.projectiles, self._proj_counter, traps=self.traps)
         resolve_turret_combat(self.player_turrets, self.players, dt, self.projectiles, self._proj_counter)
         update_effects(
             self.projectiles, self.fireball_projectiles, self.burning_areas, self.banners,
             self.players, self.buildings, self.player_turrets, self._ba_counter, dt,
+            traps=self.traps,
         )
         for trap in list(self.traps.values()):
             trap.update(dt, self.players)
@@ -232,6 +234,7 @@ class GameState:
             hook.update(dt, self.players)
         self.hook_projectiles = {k: v for k, v in self.hook_projectiles.items() if not v.is_done}
         apply_pull(self.players, dt)
+        self._resolve_assists()
         minerals_done = self._minerals_exhausted()
         self._handle_respawns(dt, minerals_done)
 
@@ -249,6 +252,36 @@ class GameState:
                     building.update_attack(dt, self.players, self.projectiles, self._proj_counter)
             update_rune(self.rune, self.players, minerals_done, dt)
             self._check_win(minerals_done)
+
+    def _resolve_assists(self):
+        import time
+        now = time.monotonic()
+        for player in self.players.values():
+            if player._assist_killer_id is None:
+                continue
+            killer_id = player._assist_killer_id
+            player._assist_killer_id = None
+
+            # Bounty: killed player had 3+ kill streak — +10 gold to entire killer's team
+            if player._had_bounty:
+                player._had_bounty = False
+                killer = self.players.get(killer_id)
+                if killer:
+                    for p in self.players.values():
+                        if p.team == killer.team:
+                            p.gold += 10
+            player.kill_streak = 0
+
+            for attacker_id, ts in player.damage_log.items():
+                if attacker_id == killer_id:
+                    continue
+                if now - ts > _ASSIST_WINDOW:
+                    continue
+                attacker = self.players.get(attacker_id)
+                if attacker and not attacker.is_dead:
+                    attacker.assists += 1
+                    attacker.gold   += 10
+            player.damage_log = {}
 
     def _minerals_exhausted(self):
         for b in self.buildings.values():

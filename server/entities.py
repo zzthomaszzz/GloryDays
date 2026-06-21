@@ -5,22 +5,24 @@
 from shared.heroes import HERO_STATS
 from server.abilities import (
     Snipe, PlaceTurret, Dash,
-    Fireball, Mend, Teleport,
+    Fireball, Mend, Teleport, FatedMissile,
     Charge, GroundSlam, Fortify,
     Spin, Bushido, PlaceBanner,
     Stealth, PlaceTrap, Bolt,
     Recall, Hook, IronStack, BattleCry,
+    EagleEye, ThrowingNets,
 )
 
 # Ability class loadouts — parallel to HERO_STATS in shared/heroes.py.
 # When adding a new hero, add its entry here AND in shared/heroes.py.
 HERO_ABILITIES = {
     'Soldier': [Snipe, PlaceTurret, Dash, Recall],
-    'Mage':    [Fireball, Mend, Teleport, Recall],
+    'Mage':    [Fireball, FatedMissile, Teleport, Recall],
     'Hunter':  [Charge, GroundSlam, Fortify, Recall],
     'Samurai': [Spin, Bushido, PlaceBanner, Recall],
     'Rat':     [Stealth, PlaceTrap, Bolt, Recall],
     'Watcher': [Hook, IronStack, BattleCry, Recall],
+    'Warden':  [Mend, ThrowingNets, EagleEye, Recall],
 }
 
 HERO_REGISTRY = set(HERO_STATS)
@@ -76,9 +78,13 @@ class Player(EntityBase):
         self.mana_regen = 0.0
 
         #KDA
-        self.kills   = 0
-        self.deaths  = 0
-        self.assists = 0
+        self.kills         = 0
+        self.deaths        = 0
+        self.assists       = 0
+        self.kill_streak   = 0
+        self.damage_log        = {}   # {attacker_id: timestamp} — recent attackers for assist tracking
+        self._assist_killer_id = None  # set on death, cleared after assist resolution
+        self._had_bounty       = False # True if killed player had 3+ kill streak
 
         #Inventory
         self.inventory = [None] * 6
@@ -132,6 +138,10 @@ class Player(EntityBase):
         self.pull_vx             = 0.0
         self.pull_vy             = 0.0
         self.pull_timer          = 0.0
+        self.damage_log          = {}
+        self._assist_killer_id   = None
+        self._had_bounty         = False
+        self.kill_streak         = 0
 
     def reset_full(self, x, y):
         self.reset_on_spawn(x, y)
@@ -193,20 +203,36 @@ class Player(EntityBase):
 class Trap:
     def __init__(self, trap_id, owner_id, team, x, y,
                  root_dur, bleed_dps, bleed_dur, sight_dur, trigger_r, size):
-        self.id           = trap_id
-        self.owner_id     = owner_id
-        self.team         = team
-        self.x            = x
-        self.y            = y
-        self.size         = size
-        self.root_dur     = root_dur
-        self.bleed_dps    = bleed_dps
-        self.bleed_dur    = bleed_dur
-        self.sight_dur    = sight_dur
-        self.trigger_r    = trigger_r
-        self.is_expired   = False
+        self.id             = trap_id
+        self.owner_id       = owner_id
+        self.team           = team
+        self.x              = x
+        self.y              = y
+        self.size           = size
+        self.root_dur       = root_dur
+        self.bleed_dps      = bleed_dps
+        self.bleed_dur      = bleed_dur
+        self.sight_dur      = sight_dur
+        self.trigger_r      = trigger_r
+        self.is_expired     = False
+        #Combat
+        self.hp             = 1
+        self.max_hp         = 1
+        self.armor          = 0
+        self.revealed_timer = 0.0
+
+    @property
+    def is_destroyed(self):
+        return self.is_expired
+
+    @is_destroyed.setter
+    def is_destroyed(self, val):
+        if val:
+            self.is_expired = True
 
     def update(self, dt, players):
+        if self.revealed_timer > 0:
+            self.revealed_timer = max(0.0, self.revealed_timer - dt)
         if self.is_expired:
             return
         r2 = self.trigger_r ** 2
@@ -228,12 +254,13 @@ class Trap:
 
     def to_dict(self):
         return {
-            "id":       self.id,
-            "owner_id": self.owner_id,
-            "team":     self.team,
-            "x":        self.x,
-            "y":        self.y,
-            "size":     self.size,
+            "id":             self.id,
+            "owner_id":       self.owner_id,
+            "team":           self.team,
+            "x":              self.x,
+            "y":              self.y,
+            "size":           self.size,
+            "revealed_timer": round(self.revealed_timer, 2),
         }
 
 

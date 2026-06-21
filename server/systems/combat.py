@@ -3,19 +3,29 @@ from shared.constants import ATTACK_WINDUP
 from server.abilities import Stealth
 from server.projectiles import Projectile, apply_damage, apply_on_hit_effects, _notify_auto_hit
 
+_TURRET_REVEAL_DUR = 0.5   # seconds an invisible enemy stays revealed while in turret range
 
-def resolve_combat(players, buildings, player_turrets, banners, dt, projectiles, proj_counter):
+
+def resolve_combat(players, buildings, player_turrets, banners, dt, projectiles, proj_counter, traps=None):
     for player in players.values():
         if player.is_dead:
             continue
-        _tick_windup(player, dt, players, buildings, player_turrets, banners)
-        _tick_attack(player, players, buildings, player_turrets, banners, dt, projectiles, proj_counter)
+        _tick_windup(player, dt, players, buildings, player_turrets, banners, traps=traps)
+        _tick_attack(player, players, buildings, player_turrets, banners, dt, projectiles, proj_counter, traps=traps)
 
 
 def resolve_turret_combat(player_turrets, players, dt, projectiles, proj_counter):
     for turret in player_turrets.values():
         if turret.is_destroyed:
             continue
+        r2 = turret.attack_range ** 2
+        for p in players.values():
+            if p.is_dead or p.team == turret.team or not p.is_invisible:
+                continue
+            dx = p.x - turret.x
+            dy = p.y - turret.y
+            if dx * dx + dy * dy <= r2:
+                p.revealed_timer = max(p.revealed_timer, _TURRET_REVEAL_DUR)
         turret.attack_timer -= dt
         if turret.attack_timer > 0:
             continue
@@ -38,7 +48,7 @@ def resolve_turret_combat(player_turrets, players, dt, projectiles, proj_counter
 # Player attack helpers
 # ---------------------------------------------------------------------------
 
-def _tick_windup(player, dt, players, buildings, player_turrets, banners):
+def _tick_windup(player, dt, players, buildings, player_turrets, banners, traps=None):
     """Pre-fire melee swing timer. Damage fires here when windup expires, not in _tick_attack."""
     if not player.is_attacking:
         return
@@ -55,19 +65,19 @@ def _tick_windup(player, dt, players, buildings, player_turrets, banners):
     if not player.attack_target:
         return
     target_type, target_id = player.attack_target
-    target = _get_target(target_type, target_id, players, buildings, player_turrets, banners)
+    target = _get_target(target_type, target_id, players, buildings, player_turrets, banners, traps=traps)
     if target and not _is_gone(target):
         apply_damage(target, player._pending_damage, target.armor, killer=player)
         apply_on_hit_effects(player, target)
         _notify_auto_hit(target)
 
 
-def _tick_attack(player, players, buildings, player_turrets, banners, dt, projectiles, proj_counter):
+def _tick_attack(player, players, buildings, player_turrets, banners, dt, projectiles, proj_counter, traps=None):
     if not player.attack_target:
         return
 
     target_type, target_id = player.attack_target
-    target = _get_target(target_type, target_id, players, buildings, player_turrets, banners)
+    target = _get_target(target_type, target_id, players, buildings, player_turrets, banners, traps=traps)
 
     # Target gone — stop attacking
     if not target or _is_gone(target):
@@ -82,6 +92,11 @@ def _tick_attack(player, players, buildings, player_turrets, banners, dt, projec
 
     # Invisible and not revealed — players cannot see stealthed enemies
     if getattr(target, "is_invisible", False) and not getattr(target, "revealed_timer", 0) > 0:
+        player.attack_target = None
+        return
+
+    # Enemy trap whose reveal has expired — deselect
+    if target_type == "trap" and not getattr(target, "revealed_timer", 0) > 0:
         player.attack_target = None
         return
 
@@ -166,7 +181,7 @@ def _find_turret_target(turret, players):
 # Shared helpers
 # ---------------------------------------------------------------------------
 
-def _get_target(target_type, target_id, players, buildings, player_turrets, banners):
+def _get_target(target_type, target_id, players, buildings, player_turrets, banners, traps=None):
     try:
         target_id = int(target_id)
     except (ValueError, TypeError):
@@ -176,6 +191,7 @@ def _get_target(target_type, target_id, players, buildings, player_turrets, bann
         case "building": return buildings.get(target_id)
         case "turret":   return player_turrets.get(target_id)
         case "banner":   return banners.get(target_id)
+        case "trap":     return (traps or {}).get(target_id)
     return None
 
 

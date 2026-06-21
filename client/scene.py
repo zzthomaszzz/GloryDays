@@ -1,4 +1,4 @@
-# Scene classes: SceneMenu, SceneConnecting, and SceneTest (the main gameplay scene)
+# Scene classes: SceneMenu, SceneConnecting, SceneTest (the main gameplay scene)
 import os
 import math
 import random
@@ -115,10 +115,6 @@ class SceneMenu:
         self._connect_rect  = pygame.Rect(
             right_x + (right_w - btn_w) // 2, int(sh * 0.87), btn_w, btn_h
         )
-        self._practice_rect = pygame.Rect(
-            right_x + (right_w - btn_w) // 2, int(sh * 0.79), btn_w, btn_h
-        )
-
         # Server card rects (precomputed for click detection)
         pad_r    = int(right_w * 0.07)
         srv_rx   = right_x + pad_r
@@ -189,9 +185,6 @@ class SceneMenu:
                         and self._server_infos[self._sel_server].get("online"):
                     srv = self._servers[self._sel_server]
                     self.next_scene = SceneConnecting(srv["host"], srv["port"], self._chosen)
-                if self._practice_rect.collidepoint(ex, ey):
-                    self.next_scene = ScenePractice(self._chosen)
-
     def update(self, dt):
         self._ping_timer -= dt
         if self._ping_timer <= 0:
@@ -479,16 +472,6 @@ class SceneMenu:
                 st_col = (200, 68, 68)
             st_s = self._f_srv.render(st_txt, True, st_col)
             ui_surf.blit(st_s, (inner_x, cy))
-
-        # PRACTICE button
-        prc_r      = self._practice_rect
-        is_hov_prc = prc_r.collidepoint(mx, my)
-        prc_bg     = (38, 100, 52) if is_hov_prc else (28, 78, 40)
-        prc_brd    = (80, 190, 100) if is_hov_prc else (55, 145, 72)
-        pygame.draw.rect(ui_surf, prc_bg,  prc_r, border_radius=8)
-        pygame.draw.rect(ui_surf, prc_brd, prc_r, 2, border_radius=8)
-        prc_s = self._f_btn.render("PRACTICE", True, (140, 220, 155))
-        ui_surf.blit(prc_s, prc_s.get_rect(center=prc_r.center))
 
         # CONNECT button
         sel_online  = self._server_infos[self._sel_server].get("online")
@@ -941,6 +924,17 @@ class SceneTest(SceneBase):
                 self._set_attack_target("banner", bid)
                 return
 
+        for tid, t in snap.get("traps", {}).items():
+            if t.get("team") == self.client.my_team:
+                continue
+            if t.get("revealed_timer", 0) <= 0:
+                continue
+            half = t.get("size", 16) / 2
+            dx, dy = wx - t["x"], wy - t["y"]
+            if abs(dx) <= half + 4 and abs(dy) <= half + 4:
+                self._set_attack_target("trap", tid)
+                return
+
     def update(self, dt):
         super().update(dt)
 
@@ -1386,19 +1380,20 @@ class SceneTest(SceneBase):
             tsx, tsy = self._w2s(tx, ty)
             sz = t.get("size", 20)
             if self._turret_img:
-                screen.blit(self._turret_img, (tsx - sz // 2, tsy - sz // 2))
+                screen.blit(self._turret_img, (tsx, tsy))
             else:
                 col = TEAM_COLOURS.get(t.get("team"), (180, 180, 180))
+                cx2, cy2 = tsx + sz // 2, tsy + sz // 2
                 pts = [
-                    (tsx,          tsy - sz // 2),
-                    (tsx + sz // 2, tsy),
-                    (tsx,          tsy + sz // 2),
-                    (tsx - sz // 2, tsy),
+                    (cx2,          tsy),
+                    (tsx + sz,     cy2),
+                    (cx2,          tsy + sz),
+                    (tsx,          cy2),
                 ]
                 pygame.draw.polygon(screen, col, pts)
                 pygame.draw.polygon(screen, (200, 200, 210), pts, 1)
             if t.get("hp", t.get("max_hp", 1)) < t.get("max_hp", 1):
-                self._draw_hp_bar(screen, tsx - sz // 2, tsy - sz // 2 - 6, sz, t.get("hp", 0), t.get("max_hp", 1))
+                self._draw_hp_bar(screen, tsx, tsy - 6, sz, t.get("hp", 0), t.get("max_hp", 1))
 
         for shop in self.client.shops.values():
             sx, sy = self._w2s(shop["x"], shop["y"])
@@ -1418,7 +1413,12 @@ class SceneTest(SceneBase):
                 continue
             key = ("proj", pid)
             active_trail_keys.add(key)
-            self._draw_proj_trail(key, pos[0], pos[1], (220, 220, 200), 2, 5)
+            if proj.get("is_fated_missile"):
+                self._draw_proj_trail(key, pos[0], pos[1], (160, 60, 220), 3, 8)
+            elif proj.get("is_net") and not proj.get("is_landed"):
+                self._draw_proj_trail(key, pos[0], pos[1], (80, 200, 100), 3, 6)
+            else:
+                self._draw_proj_trail(key, pos[0], pos[1], (220, 220, 200), 2, 5)
 
         for pid, fp in snap.get("fireball_projectiles", {}).items():
             pos = self.client.get_interpolated_xy("fireball_projectiles", pid)
@@ -1447,7 +1447,20 @@ class SceneTest(SceneBase):
             if pos is None:
                 continue
             sx, sy = self._w2s(pos[0], pos[1])
-            if self._bullet_img:
+            if proj.get("is_net"):
+                r = proj.get("radius", 40)
+                if proj.get("is_landed"):
+                    net_surf = pygame.Surface((r * 2 + 4, r * 2 + 4), pygame.SRCALPHA)
+                    pygame.draw.circle(net_surf, (60, 180, 80, 80), (r + 2, r + 2), r)
+                    pygame.draw.circle(net_surf, (100, 230, 120), (r + 2, r + 2), r, 2)
+                    screen.blit(net_surf, (sx - r - 2, sy - r - 2))
+                else:
+                    pygame.draw.circle(screen, (60, 160, 70), (sx, sy), 7)
+                    pygame.draw.circle(screen, (120, 240, 140), (sx, sy), 7, 2)
+            elif proj.get("is_fated_missile"):
+                pygame.draw.circle(screen, (100, 20, 180), (sx, sy), 6)
+                pygame.draw.circle(screen, (210, 130, 255), (sx, sy), 6, 2)
+            elif self._bullet_img:
                 screen.blit(self._bullet_img, (sx - 3, sy - 3))
             else:
                 col = TEAM_COLOURS.get(proj.get("owner_team"), (255, 255, 200))
@@ -1506,17 +1519,21 @@ class SceneTest(SceneBase):
             dur_s = self._font_label.render(f"{bn.get('duration', 0):.0f}s", True, (200, 230, 200))
             screen.blit(dur_s, dur_s.get_rect(centerx=sx, bottom=sy + 8))
 
-        #Traps — only render allied traps
+        #Traps — allied always visible; enemy traps visible when revealed by Eagle Eye
         for trap in snap.get("traps", {}).values():
-            if trap.get("team") != my_team:
+            is_allied   = trap.get("team") == my_team
+            is_revealed = trap.get("revealed_timer", 0) > 0
+            if not is_allied and not is_revealed:
                 continue
             tx, ty = self._w2s(trap["x"], trap["y"])
             half = trap.get("size", 16) // 2
             if self._trap_img:
                 screen.blit(self._trap_img, (tx - half, ty - half))
             else:
-                pygame.draw.rect(screen, (160, 120, 20), (tx - half, ty - half, half * 2, half * 2))
-                pygame.draw.rect(screen, (220, 180, 40), (tx - half, ty - half, half * 2, half * 2), 1)
+                col = (160, 120, 20) if is_allied else (180, 40, 40)
+                pygame.draw.rect(screen, col, (tx - half, ty - half, half * 2, half * 2))
+            if not is_allied:
+                pygame.draw.rect(screen, (255, 80, 80), (tx - half - 1, ty - half - 1, half * 2 + 2, half * 2 + 2), 1)
 
         #Bolt projectiles — slow rotating sprite
         for pid, bp in snap.get("bolt_projectiles", {}).items():
@@ -1871,61 +1888,3 @@ class SceneTest(SceneBase):
             return
         pygame.draw.rect(screen, (80, 0, 0), (x, y, width, 4))
         pygame.draw.rect(screen, (0, 200, 80), (x, y, int(width * hp / max_hp), 4))
-
-
-#-------------------------------------------------------------------------------------------------------------------Practice
-_PRACTICE_R_DESC = {
-    "Rat":     "R: Stealth toggle",
-    "Mage":    "R: Teleport (click)",
-    "Samurai": "R: Spin (5s aura)",
-    "Hunter":  "R: Fortify (blue ring)",
-    "Watcher": "R: Hook (click)",
-    "Soldier": "R: Bolt (click)",
-}
-
-
-class ScenePractice(SceneTest):
-    """SceneTest driven by a local PracticeClient — no server required."""
-
-    def __init__(self, hero_name: str):
-        from client.practice import PracticeClient
-        self._pc = PracticeClient(hero_name)
-        super().__init__(self._pc)
-        self._font_overlay = pygame.font.SysFont("consolas", 12, bold=True)
-        r_desc = _PRACTICE_R_DESC.get(hero_name, "R: Special")
-        self._hint = (
-            f"WASD: Move  |  Q: Fireball  |  E: Slam ring  |  {r_desc}  |  "
-            f"Auto-attacks nearest  |  ESC: Exit"
-        )
-
-    # Full-map visibility — bypass fog of war in practice
-    def _is_visible(self, x, y, entity_id=None):
-        return True
-
-    def update(self, dt: float):
-        self._pc.update(dt)
-        super().update(dt)
-
-    def process_input(self, events):
-        forward = []
-        exit_practice = False
-        for event in events:
-            if (event.type == pygame.KEYDOWN
-                    and event.key == pygame.K_ESCAPE
-                    and self._placement_mode is None
-                    and self._entity_target_mode is None
-                    and not self._shop_open):
-                exit_practice = True
-            else:
-                forward.append(event)
-        super().process_input(forward)
-        if exit_practice:
-            self.next_scene = SceneMenu()
-
-    def render_ui(self, ui_surf):
-        super().render_ui(ui_surf)
-        pad = 8
-        lbl = self._font_overlay.render("PRACTICE MODE", True, (220, 185, 45))
-        ui_surf.blit(lbl, (pad, pad))
-        hint = self._font_overlay.render(self._hint, True, (140, 130, 90))
-        ui_surf.blit(hint, (pad, pad + lbl.get_height() + 3))

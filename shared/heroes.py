@@ -22,9 +22,9 @@ HERO_STATS = {
         is_ranged=True, proj_speed=350,
         desc="Burst caster who excels at area control and healing.",
         ability_descs=[
-            ("Q", "Fireball",  "Launch a fireball that burns an area"),
-            ("E", "Mend",      "Sacrifice HP to heal a target ally"),
-            ("R", "Teleport",  "Channel to teleport to a location"),
+            ("Q", "Fireball",       "Launch a fireball that burns an area"),
+            ("E", "Fated Missile",  "Channel then fire a homing missile — stuns on impact"),
+            ("R", "Teleport",       "Channel to teleport to a location"),
         ],
     ),
     'Hunter': dict(
@@ -73,6 +73,18 @@ HERO_STATS = {
             ("Q", "Hook",       "Channel then launch a hook — pulls hit enemies toward you"),
             ("E", "Iron Stack", "Passive: each auto attack adds +5 armor (up to 10 stacks, 5s)"),
             ("R", "Battle Cry", "Grant +40 speed to nearby allies for 3 seconds"),
+        ],
+    ),
+    'Warden': dict(
+        hp=380, mana=350, attack_damage=55, ability_power=0,
+        attack_range=130, attack_speed=0.6,  crit_chance=0.0,
+        armor=18, magic_resist=22, speed=108, vision=175,
+        is_ranged=True, proj_speed=350,
+        desc="Ranged support who heals allies, traps enemies, and sees through stealth.",
+        ability_descs=[
+            ("Q", "Mend",          "Sacrifice HP to heal a target ally"),
+            ("E", "Throwing Nets", "Throw a slow net that roots enemies on landing"),
+            ("R", "Eagle Eye",     "Passive: reveal invisible enemies within vision range"),
         ],
     ),
 }

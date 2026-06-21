@@ -1,15 +1,15 @@
 # System: advances projectiles, fireballs, burning areas, and banners each frame
 def update_effects(projectiles, fireball_projectiles, burning_areas, banners,
-                   players, buildings, player_turrets, ba_counter, dt):
-    _tick_projectiles(projectiles, players, buildings, player_turrets, banners, dt)
+                   players, buildings, player_turrets, ba_counter, dt, traps=None):
+    _tick_projectiles(projectiles, players, buildings, player_turrets, banners, dt, traps=traps)
     _tick_fireballs(fireball_projectiles, burning_areas, ba_counter, dt)
     _tick_burning_areas(burning_areas, players, player_turrets, dt)
     _tick_banners(banners, players, dt)
 
 
-def _tick_projectiles(projectiles, players, buildings, player_turrets, banners, dt):
+def _tick_projectiles(projectiles, players, buildings, player_turrets, banners, dt, traps=None):
     for proj in list(projectiles.values()):
-        proj.update(dt, players, buildings, player_turrets, banners)
+        proj.update(dt, players, buildings, player_turrets, banners, traps=traps)
     for k in [k for k, p in projectiles.items() if p.is_done]:
         del projectiles[k]
 
